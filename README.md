@@ -34,7 +34,7 @@ Po odlocie samolotu na jego miejsce pojawia się natychmiast (jeżeli jest dost�
 takiej samej pojemności P jak poprzedni, ale z innym dopuszczalnym ciężarem bagażu podręcznego
 Mdi. Łączna liczba samolotów wynosi N, każdy o pojemności P.
 Samoloty przewożą pasażerów do miejsca docelowego i po czasie Ti wracają na lotnisko. Po
-otrzymaniu od dyspozytora polecenia (sygnał 2) pasażerowie nie mogą wsiąść do żadnego samolotu
-- nie mogą wejść na odprawę biletowo-bagażową. Samoloty kończą pracę po przewiezieniu
+otrzymaniu od dyspozytora polecenia (sygnał 2) pasażerowie nie mogą wsiąść do żadnego samolotu,
+nie mogą wejść na odprawę biletowo-bagażową. Samoloty kończą pracę po przewiezieniu
 wszystkich pasażerów.<br>
 Napisz programy symulujące działanie dyspozytora, kapitana samolotu i pasażerów.
