@@ -1,6 +1,6 @@
 /*******************************************************
  * Program przyjmuje jeden parametr:
- *   ./airport_sim <liczba_pasazerow_do_wygenerowania>
+ *   ./airport_sim <liczba_pasazerow_do_wygenerowania> <limit_bagazu>
  * Kompilacja:
  *   gcc -Wall -o airport_sim airport_sim.c -pthread
  *******************************************************/
@@ -12,11 +12,16 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <time.h>
+#include <semaphore.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 struct {
     int total_passengers;
     int generated_count;
     int is_simulation_active;
+    int baggage_limit;
+    sem_t *baggage_check_sem;
 } g_data;
 
 pthread_mutex_t g_data_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -35,8 +40,8 @@ void *passenger_thread(void *arg);
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2) {
-        fprintf(stderr, "Uzycie: %s <liczba_pasażerów>\n", argv[0]);
+    if (argc < 3) {
+        fprintf(stderr, "Uzycie: %s <liczba_pasazerow> <limit_bagazu>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
@@ -47,14 +52,27 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    g_data.baggage_limit = atoi(argv[2]);
+    if (g_data.baggage_limit <= 0) {
+        fprintf(stderr, "Niepoprawny limit bagazu: %s\n", argv[2]);
+        return EXIT_FAILURE;
+    }
+
     g_data.generated_count = 0;
     g_data.is_simulation_active = 1;
 
     /* Inicjujemy losowosc */
     srand(time(NULL));
 
-    printf("[MAIN] Start symulacji. Docelowo wygenerujemy %d pasazerow.\n",
-           g_data.total_passengers);
+    sem_unlink("/baggage_check_sem"); // gdyby poprzedni semafor nie byl usuniety
+    g_data.baggage_check_sem = sem_open("/baggage_check_sem", O_CREAT, 0600, 1);
+    if (g_data.baggage_check_sem == SEM_FAILED) {
+        perror("sem_open() error");
+        return EXIT_FAILURE;
+    }
+
+    printf("[MAIN] Start symulacji: %d pasazerow, limit bagazu = %d kg.\n",
+           g_data.total_passengers, g_data.baggage_limit);
 
     /* Tworzymy watki: dispatcher, plane, passenger_generator */
     pthread_t th_dispatcher, th_plane, th_generator;
@@ -85,6 +103,16 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
+    /* Sprzatanie – zamykamy i usuwamy nazwany semafor */
+    if (sem_close(g_data.baggage_check_sem) != 0) {
+        perror("sem_close() error");
+    }
+
+    /* sem_unlink usuwa semafor gdy juz nie jest uzywany */
+    if (sem_unlink("/baggage_check_sem") != 0) {
+        perror("sem_unlink() error");
+    }
+
     printf("[MAIN] Symulacja zakonczona.\n");
 
     return EXIT_SUCCESS;
@@ -102,10 +130,11 @@ void *dispatcher_thread(void *arg)
         pthread_mutex_lock(&g_data_mutex);
         int still_active = g_data.is_simulation_active;
         int gen_count = g_data.generated_count;
+        int total = g_data.total_passengers;
         pthread_mutex_unlock(&g_data_mutex);
 
         printf("[DISPATCHER] Raport: wygenerowano %d / %d pasazerow.\n",
-               gen_count, g_data.total_passengers);
+               gen_count, total);
 
         if (!still_active) {
             printf("[DISPATCHER] Koncze prace (is_simulation_active=0).\n");
@@ -206,10 +235,41 @@ void *passenger_thread(void *arg)
     printf("[PASSENGER %d] Jestem watkiem pasazera (bagaz=%d kg, VIP=%d, gender=%d)\n",
            my_id, bag_weight, is_vip, gender);
 
-    int processing_time = rand() % 3 + 1;
-    sleep(processing_time);
+    printf("[PASSENGER %d] Czeka na dostep do stanowiska odprawy...\n", my_id);
 
-    printf("[PASSENGER %d] Koncze (odbylem podroz / zrezygnowalem / itp.)\n", my_id);
+    if (sem_wait(g_data.baggage_check_sem) != 0) {
+        perror("sem_wait() error");
+        pthread_exit(NULL);
+    }
+
+    printf("[PASSENGER %d] Jestem w odprawie bagazowej...\n", my_id);
+    sleep(1);
+
+    int limit = g_data.baggage_limit;
+    if (bag_weight > limit) {
+        printf("[PASSENGER %d] ODRZUCONY - bagaz %d kg przekracza limit %d kg!\n",
+               my_id, bag_weight, limit);
+
+        // Zwolniamy stanowisko i konczymy
+        if (sem_post(g_data.baggage_check_sem) != 0) {
+            perror("sem_post() error");
+        }
+        pthread_exit(NULL);
+    }
+
+    printf("[PASSENGER %d] Odprawa OK (bagaz %d kg <= %d kg).\n",
+           my_id, bag_weight, limit);
+
+    // Konczymy odprawe - zwalniamy semafor
+    if (sem_post(g_data.baggage_check_sem) != 0) {
+        perror("sem_post() error");
+        pthread_exit(NULL);
+    }
+
+    sleep(1);
+
+    printf("[PASSENGER %d] Zakonczyl proces - gotowy do dalszych etapow.\n",
+           my_id);
 
     pthread_exit(NULL);
 }
