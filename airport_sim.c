@@ -16,15 +16,27 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#define SECURITY_STATIONS 3
+
 struct {
     int total_passengers;
     int generated_count;
     int is_simulation_active;
     int baggage_limit;
     sem_t *baggage_check_sem;
-} g_data;
 
-pthread_mutex_t g_data_mutex = PTHREAD_MUTEX_INITIALIZER;
+    /* TABLICA WSKAŹNIKÓW do semaforów nazwanych (3 stanowiska).
+     * Każdy semafor ma początkową wartość = 2. */
+    sem_t *security_sem[SECURITY_STATIONS];
+
+    /* (0=male, 1=female, -1=empty) */
+    int station_gender[SECURITY_STATIONS];
+
+    int station_occupancy[SECURITY_STATIONS];
+
+    pthread_mutex_t station_mutex;
+    pthread_mutex_t g_data_mutex;
+} g_data;
 
 /* Watek Dyspozytora (Wiezy Kontroli) */
 void *dispatcher_thread(void *arg);
@@ -37,6 +49,8 @@ void *passenger_generator_thread(void *arg);
 
 /* Kazdy Pasazer tez bedzie watkiem */
 void *passenger_thread(void *arg);
+
+void enter_security_check(int gender);
 
 int main(int argc, char *argv[])
 {
@@ -67,8 +81,34 @@ int main(int argc, char *argv[])
     sem_unlink("/baggage_check_sem"); // gdyby poprzedni semafor nie byl usuniety
     g_data.baggage_check_sem = sem_open("/baggage_check_sem", O_CREAT, 0600, 1);
     if (g_data.baggage_check_sem == SEM_FAILED) {
-        perror("sem_open() error");
+        perror("sem_open(baggage_check_sem) error");
         return EXIT_FAILURE;
+    }
+
+    /* 2) Semafory nazwane do 3 stanowisk bezpieczeństwa */
+    for (int i = 0; i < SECURITY_STATIONS; i++) {
+        char name[32];
+        sprintf(name, "/security_sem_%d", i);
+
+        sem_unlink(name); // na wypadek, gdyby istniał
+        g_data.security_sem[i] = sem_open(name, O_CREAT, 0600, 2);
+        if (g_data.security_sem[i] == SEM_FAILED) {
+            perror("sem_open(security_sem[i])");
+            return EXIT_FAILURE;
+        }
+
+        g_data.station_gender[i]    = -1; // puste
+        g_data.station_occupancy[i] = 0;  // brak osób
+    }
+
+    /* 3) Inicjujemy muteksy */
+    if (pthread_mutex_init(&g_data.station_mutex, NULL) != 0) {
+        perror("pthread_mutex_init(station_mutex)");
+        exit(EXIT_FAILURE);
+    }
+    if (pthread_mutex_init(&g_data.g_data_mutex, NULL) != 0) {
+        perror("pthread_mutex_init(g_data_mutex)");
+        exit(EXIT_FAILURE);
     }
 
     printf("[MAIN] Start symulacji: %d pasazerow, limit bagazu = %d kg.\n",
@@ -90,6 +130,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
+    /* Czekamy na koniec wątków generator, plane, dispatcher */
     if (pthread_join(th_generator, NULL) != 0) {
         perror("pthread_join(generator) error");
         exit(EXIT_FAILURE);
@@ -103,18 +144,36 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    /* Sprzatanie – zamykamy i usuwamy nazwany semafor */
+    /* Sprzątanie:
+     * - zamykamy semafor nazwany bagażowy
+     * - unlink
+     * - niszczymy semafory security
+     * - niszczymy muteksy
+     */
+    // Odprawa biletowo-bagażowa
     if (sem_close(g_data.baggage_check_sem) != 0) {
-        perror("sem_close() error");
+        perror("sem_close(baggage_check_sem)");
     }
-
-    /* sem_unlink usuwa semafor gdy juz nie jest uzywany */
     if (sem_unlink("/baggage_check_sem") != 0) {
-        perror("sem_unlink() error");
+        perror("sem_unlink(baggage_check_sem)");
     }
 
-    printf("[MAIN] Symulacja zakonczona.\n");
+    // Stanowiska bezpieczeństwa
+    for (int i = 0; i < SECURITY_STATIONS; i++) {
+        if (sem_close(g_data.security_sem[i]) != 0) {
+            perror("sem_close(security_sem[i])");
+        }
+        char name[32];
+        sprintf(name, "/security_sem_%d", i);
+        if (sem_unlink(name) != 0) {
+            perror("sem_unlink(security_sem[i])");
+        }
+    }
 
+    pthread_mutex_destroy(&g_data.station_mutex);
+    pthread_mutex_destroy(&g_data.g_data_mutex);
+
+    printf("[MAIN] Symulacja zakończona.\n");
     return EXIT_SUCCESS;
 }
 
@@ -127,11 +186,11 @@ void *dispatcher_thread(void *arg)
     while (1) {
         sleep(3);
 
-        pthread_mutex_lock(&g_data_mutex);
+        pthread_mutex_lock(&g_data.g_data_mutex);
         int still_active = g_data.is_simulation_active;
         int gen_count = g_data.generated_count;
         int total = g_data.total_passengers;
-        pthread_mutex_unlock(&g_data_mutex);
+        pthread_mutex_unlock(&g_data.g_data_mutex);
 
         printf("[DISPATCHER] Raport: wygenerowano %d / %d pasazerow.\n",
                gen_count, total);
@@ -154,9 +213,9 @@ void *plane_thread(void *arg)
     while (1) {
         sleep(2);
 
-        pthread_mutex_lock(&g_data_mutex);
+        pthread_mutex_lock(&g_data.g_data_mutex);
         int still_active = g_data.is_simulation_active;
-        pthread_mutex_unlock(&g_data_mutex);
+        pthread_mutex_unlock(&g_data.g_data_mutex);
 
         if (!still_active) {
             printf("[PLANE] Koncze prace (is_simulation_active=0).\n");
@@ -175,17 +234,17 @@ void *passenger_generator_thread(void *arg)
     printf("[GENERATOR] Startuje. Bede tworzyl pasazerow.\n");
 
     while (1) {
-        pthread_mutex_lock(&g_data_mutex);
+        pthread_mutex_lock(&g_data.g_data_mutex);
         int current_count = g_data.generated_count;
         int max_count = g_data.total_passengers;
-        pthread_mutex_unlock(&g_data_mutex);
+        pthread_mutex_unlock(&g_data.g_data_mutex);
 
         if (current_count >= max_count) {
             printf("[GENERATOR] Osiagnieto limit %d pasazerow.\n", max_count);
 
-            pthread_mutex_lock(&g_data_mutex);
+            pthread_mutex_lock(&g_data.g_data_mutex);
             g_data.is_simulation_active = 0;
-            pthread_mutex_unlock(&g_data_mutex);
+            pthread_mutex_unlock(&g_data.g_data_mutex);
 
             break;
         }
@@ -214,9 +273,9 @@ void *passenger_generator_thread(void *arg)
             perror("pthread_detach(passenger) error");
         }
 
-        pthread_mutex_lock(&g_data_mutex);
+        pthread_mutex_lock(&g_data.g_data_mutex);
         g_data.generated_count++;
-        pthread_mutex_unlock(&g_data_mutex);
+        pthread_mutex_unlock(&g_data.g_data_mutex);
     }
 
     printf("[GENERATOR] Koncze prace.\n");
@@ -238,7 +297,7 @@ void *passenger_thread(void *arg)
     printf("[PASSENGER %d] Czeka na dostep do stanowiska odprawy...\n", my_id);
 
     if (sem_wait(g_data.baggage_check_sem) != 0) {
-        perror("sem_wait() error");
+        perror("sem_wait(baggage_check_sem) error");
         pthread_exit(NULL);
     }
 
@@ -247,29 +306,106 @@ void *passenger_thread(void *arg)
 
     int limit = g_data.baggage_limit;
     if (bag_weight > limit) {
-        printf("[PASSENGER %d] ODRZUCONY - bagaz %d kg przekracza limit %d kg!\n",
+        printf("[PASSENGER %d] ODRZUCONY - bagaż %d > limit %d.\n",
                my_id, bag_weight, limit);
 
-        // Zwolniamy stanowisko i konczymy
-        if (sem_post(g_data.baggage_check_sem) != 0) {
-            perror("sem_post() error");
-        }
+        sem_post(g_data.baggage_check_sem);
         pthread_exit(NULL);
     }
 
-    printf("[PASSENGER %d] Odprawa OK (bagaz %d kg <= %d kg).\n",
-           my_id, bag_weight, limit);
+    printf("[PASSENGER %d] Odprawa OK.\n", my_id);
 
-    // Konczymy odprawe - zwalniamy semafor
-    if (sem_post(g_data.baggage_check_sem) != 0) {
-        perror("sem_post() error");
-        pthread_exit(NULL);
-    }
+    sem_post(g_data.baggage_check_sem);
 
+    // Kontrola bezpieczeństwa
+    enter_security_check(gender);
+
+    // po przejściu kontroli bezpieczeństwa...
+    printf("[PASSENGER %d] Przeszedł kontrolę bezpieczeństwa, czeka na samolot...\n", my_id);
+
+    // w przyszłości: czeka w holu, idzie na schody, itp.
     sleep(1);
 
-    printf("[PASSENGER %d] Zakonczyl proces - gotowy do dalszych etapow.\n",
-           my_id);
-
+    printf("[PASSENGER %d] Kończy (dotarł do kolejnego etapu).\n", my_id);
     pthread_exit(NULL);
+}
+
+/* =====================================================
+   enter_security_check(gender)
+   - Utrzymujemy 'station_occupancy[i]'
+   - Jeśli occupancy == 0 -> station_gender[i] = -1
+   ===================================================== */
+void enter_security_check(int gender)
+{
+    while (1) {
+        int found_station = -1;
+
+        /* Szukamy stanowiska, do którego możemy wejść */
+        pthread_mutex_lock(&g_data.station_mutex);
+
+        for (int i = 0; i < SECURITY_STATIONS; i++) {
+            int st_gender    = g_data.station_gender[i];
+            int st_occupancy = g_data.station_occupancy[i];
+
+            if (st_gender == -1) {
+                // puste stanowisko -> rezerwujemy dla danej płci
+                g_data.station_gender[i] = gender;
+                found_station = i;
+                break;
+            } else if (st_gender == gender && st_occupancy < 2) {
+                // ta sama płeć i jest jeszcze miejsce (max 2)
+                found_station = i;
+                break;
+            }
+        }
+
+        pthread_mutex_unlock(&g_data.station_mutex);
+
+        if (found_station >= 0) {
+            // Mamy stację, próbujemy semafora
+            if (sem_wait(g_data.security_sem[found_station]) != 0) {
+                perror("sem_wait(security_sem)");
+                // w razie błędu ponawiamy
+                continue;
+            }
+
+            // Udało się przejąć semafor -> wchodzimy
+            pthread_mutex_lock(&g_data.station_mutex);
+            g_data.station_occupancy[found_station]++;  // pasażer doszedł
+            int occupancy_now = g_data.station_occupancy[found_station];
+            pthread_mutex_unlock(&g_data.station_mutex);
+
+            printf("[SECURITY] Pasażer(gender=%d) WCHODZI do st.%d (occupancy=%d)\n",
+                   gender, found_station, occupancy_now);
+
+            // Symulacja kontroli
+            sleep(1);
+
+            // Wychodzimy
+            if (sem_post(g_data.security_sem[found_station]) != 0) {
+                perror("sem_post(security_sem)");
+            }
+
+            // Zmniejszamy liczbę osób
+            pthread_mutex_lock(&g_data.station_mutex);
+            g_data.station_occupancy[found_station]--;
+            int occ_after = g_data.station_occupancy[found_station];
+
+            printf("[SECURITY] Pasażer(gender=%d) WYCHODZI z st.%d (occupancy=%d)\n",
+                   gender, found_station, occ_after);
+
+            if (occ_after == 0) {
+                // Zwolnione całkowicie
+                g_data.station_gender[found_station] = -1;
+                printf("[SECURITY] Stanowisko %d PUSTE.\n", found_station);
+            }
+            pthread_mutex_unlock(&g_data.station_mutex);
+
+            // Kończymy -> pasażer przeszedł kontrolę
+            return;
+        }
+
+        // Nie znaleźliśmy stacji -> czekamy i ponawiamy
+        sleep(1);
+    }
 }
