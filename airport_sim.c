@@ -1,6 +1,6 @@
 /*******************************************************
  * Program przyjmuje jeden parametr:
- *   ./airport_sim <liczba_pasazerow_do_wygenerowania> <limit_bagazu> <pojemnosc_schodow>
+ *   ./airport_sim <liczba_pasazerow_do_wygenerowania> <limit_bagazu> <pojemnosc_schodow> <czas_odlotu> <pojemnosc_samolotu>
  * Kompilacja:
  *   gcc -Wall -o airport_sim airport_sim.c -pthread
  *******************************************************/
@@ -25,6 +25,16 @@ struct {
     int is_simulation_active;
     int baggage_limit;
     int stairs_capacity;
+
+    int takeoff_time;
+    int plane_capacity;
+    int people_in_plane;
+
+    /* Flaga: 0 = można wsiadać do bieżącego samolotu
+     *        1 = samolot startuje, spóźnieni czekają na nowy
+     */
+    int plane_in_flight;
+
     sem_t *baggage_check_sem;
 
     /* Semafor nazwany do schodów pasażerskich (K naraz) */
@@ -56,12 +66,20 @@ void *passenger_generator_thread(void *arg);
 void *passenger_thread(void *arg);
 
 void enter_security_check(int gender);
-void enter_stairs(int id);
+void enter_stairs_and_plane(int id);
+
+static void safe_sem_unlink(const char *name)
+{
+    if (sem_unlink(name) == -1 && errno != ENOENT) {
+        // tylko jeśli błąd != brak pliku
+        fprintf(stderr, "sem_unlink(%s) error: %s\n", name, strerror(errno));
+    }
+}
 
 int main(int argc, char *argv[])
 {
-    if (argc < 4) {
-        fprintf(stderr, "Uzycie: %s <liczba_pasazerow> <limit_bagazu> <pojemnosc_schodow>\n", argv[0]);
+    if (argc < 6) {
+        fprintf(stderr, "Uzycie: %s <liczba_pasazerow> <limit_bagazu> <pojemnosc_schodow> <T1> <pojemnosc_samolotu>\n", argv[0]);
         return EXIT_FAILURE;
     }
 
@@ -69,20 +87,26 @@ int main(int argc, char *argv[])
     g_data.total_passengers  = atoi(argv[1]);
     g_data.baggage_limit     = atoi(argv[2]);
     g_data.stairs_capacity   = atoi(argv[3]);
+    g_data.takeoff_time      = atoi(argv[4]);
+    g_data.plane_capacity    = atoi(argv[5]);
 
-    if (g_data.total_passengers <= 0 || g_data.baggage_limit <= 0 || g_data.stairs_capacity <= 0) {
+    if (g_data.total_passengers <= 0 || g_data.baggage_limit <= 0 || g_data.stairs_capacity <= 0 ||
+        g_data.takeoff_time <= 0 || g_data.plane_capacity <= 0) {
         fprintf(stderr, "Niepoprawne parametry wejsciowe!\n");
         return EXIT_FAILURE;
     }
 
     g_data.generated_count = 0;
+    g_data.finished_passengers = 0;
     g_data.is_simulation_active = 1;
+    g_data.people_in_plane = 0;
+    g_data.plane_in_flight = 0;
 
     /* Inicjujemy losowosc */
     srand(time(NULL));
 
     sem_unlink("/baggage_check_sem"); // gdyby poprzedni semafor nie byl usuniety
-    g_data.baggage_check_sem = sem_open("/baggage_check_sem", O_CREAT, 0600, 1);
+    g_data.baggage_check_sem = sem_open("/baggage_check_sem", O_CREAT, 0666, 1);
     if (g_data.baggage_check_sem == SEM_FAILED) {
         perror("sem_open(baggage_check_sem) error");
         return EXIT_FAILURE;
@@ -90,7 +114,7 @@ int main(int argc, char *argv[])
 
     /* Semafor nazwany do schodow o pojemności K */
     sem_unlink("/stairs_sem");
-    g_data.stairs_sem = sem_open("/stairs_sem", O_CREAT, 0600, g_data.stairs_capacity);
+    g_data.stairs_sem = sem_open("/stairs_sem", O_CREAT, 0666, g_data.stairs_capacity);
     if (g_data.stairs_sem == SEM_FAILED) {
         perror("sem_open(stairs_sem)");
         return EXIT_FAILURE;
@@ -102,13 +126,13 @@ int main(int argc, char *argv[])
         sprintf(name, "/security_sem_%d", i);
 
         sem_unlink(name); // na wypadek, gdyby istniał
-        g_data.security_sem[i] = sem_open(name, O_CREAT, 0600, 2);
+        g_data.security_sem[i] = sem_open(name, O_CREAT, 0666, 2);
         if (g_data.security_sem[i] == SEM_FAILED) {
             perror("sem_open(security_sem[i])");
             return EXIT_FAILURE;
         }
 
-        g_data.station_gender[i]    = -1; // puste
+        g_data.station_gender[i] = -1; // puste
         g_data.station_occupancy[i] = 0;  // brak osób
     }
 
@@ -122,8 +146,9 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    printf("[MAIN] Start symulacji: %d pasazerow, limit bagazu = %d kg.\n",
-           g_data.total_passengers, g_data.baggage_limit);
+    printf("[MAIN] Start symulacji. Passengers=%d, limit=%d, stairs=%d, T1=%d, planeCap=%d\n",
+           g_data.total_passengers, g_data.baggage_limit, g_data.stairs_capacity,
+           g_data.takeoff_time, g_data.plane_capacity);
 
     /* Tworzymy watki: dispatcher, plane, passenger_generator */
     pthread_t th_dispatcher, th_plane, th_generator;
@@ -165,28 +190,22 @@ int main(int argc, char *argv[])
     if (sem_close(g_data.baggage_check_sem) != 0) {
         perror("sem_close(baggage_check_sem)");
     }
-    if (sem_unlink("/baggage_check_sem") != 0) {
-        perror("sem_unlink(baggage_check_sem)");
-    }
+    safe_sem_unlink("/baggage_check_sem");
 
     // stairs
     if (sem_close(g_data.stairs_sem) != 0) {
         perror("sem_close(stairs_sem)");
     }
-    if (sem_unlink("/stairs_sem") != 0) {
-        perror("sem_unlink(/stairs_sem)");
-    }
+    safe_sem_unlink("/stairs_sem");
 
-    // Stanowiska bezpieczeństwa
+    // security
     for (int i = 0; i < SECURITY_STATIONS; i++) {
         if (sem_close(g_data.security_sem[i]) != 0) {
             perror("sem_close(security_sem[i])");
         }
         char name[32];
         sprintf(name, "/security_sem_%d", i);
-        if (sem_unlink(name) != 0) {
-            perror("sem_unlink(security_sem[i])");
-        }
+        safe_sem_unlink(name);
     }
 
     pthread_mutex_destroy(&g_data.station_mutex);
@@ -198,9 +217,8 @@ int main(int argc, char *argv[])
 
 void *dispatcher_thread(void *arg)
 {
-    (void) arg;
-
-    printf("[DISPATCHER] Startuje.\n");
+    (void)arg;
+    printf("[DISPATCHER] Start.\n");
 
     while (1) {
         sleep(3);
@@ -210,50 +228,127 @@ void *dispatcher_thread(void *arg)
         int gen_count = g_data.generated_count;
         int total = g_data.total_passengers;
         int finished = g_data.finished_passengers;
+        int ppl_in_plane = g_data.people_in_plane;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
-        printf("[DISPATCHER] Raport: wygenerowano %d / %d, skończyło %d pasazerow.\n",
-               gen_count, total, finished);
+        printf("[DISPATCHER] Raport: gen=%d/%d, finished=%d, inPlane=%d\n",
+               gen_count, total, finished, ppl_in_plane);
 
+        // Jeśli wszyscy pasażerowie skończyli – koniec
         if (finished >= total) {
-            // Wszyscy zakończyli -> kończymy symulację
             pthread_mutex_lock(&g_data.g_data_mutex);
             g_data.is_simulation_active = 0;
             pthread_mutex_unlock(&g_data.g_data_mutex);
-
-            printf("[DISPATCHER] Wszyscy pasażerowie (%d) skończyli. Kończę.\n", finished);
+            printf("[DISPATCHER] Wszyscy pasażerowie (%d) zakończyli.\n", finished);
             break;
         }
 
         if (!still_active) {
-            printf("[DISPATCHER] Koncze prace (is_simulation_active=0).\n");
+            printf("[DISPATCHER] is_simulation_active=0 -> kończę.\n");
             break;
         }
     }
 
+    printf("[DISPATCHER] Kończę wątek.\n");
     pthread_exit(NULL);
 }
 
 void *plane_thread(void *arg)
 {
-    (void) arg;
+    (void)arg;
+    printf("[PLANE] Start - wielokrotne loty.\n");
 
-    printf("[PLANE] Startuje.\n");
+    int flight_no = 0;
 
     while (1) {
-        sleep(2);
-
+        // Sprawdzamy, czy wszyscy pasażerowie skończyli
         pthread_mutex_lock(&g_data.g_data_mutex);
-        int still_active = g_data.is_simulation_active;
+        int finished = g_data.finished_passengers;
+        int total = g_data.total_passengers;
+        int active = g_data.is_simulation_active;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
-        if (!still_active) {
-            printf("[PLANE] Koncze prace (is_simulation_active=0).\n");
+        if (finished >= total || !active) {
+            printf("[PLANE] Nie ma potrzeby kolejnego lotu (finished=%d/%d, active=%d).\n",
+                   finished, total, active);
             break;
         }
 
+        // "Nowy samolot" - zerujemy people_in_plane i plane_in_flight=0
+        flight_no++;
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        g_data.people_in_plane = 0;
+        g_data.plane_in_flight = 0; // otwieramy drzwi - można wsiadać
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        printf("[PLANE] >>> Samolot #%d czeka max %d sek lub do zapełnienia.\n",
+               flight_no, g_data.takeoff_time);
+
+        // Czekamy do upływu T1 lub do wypełnienia
+        int elapsed = 0;
+        int step = 1;
+
+        while (1) {
+            sleep(step);
+            elapsed += step;
+
+            pthread_mutex_lock(&g_data.g_data_mutex);
+            int plane_now = g_data.people_in_plane;
+            int capacity  = g_data.plane_capacity;
+            int fin2      = g_data.finished_passengers;
+            int tot2      = g_data.total_passengers;
+            int active2   = g_data.is_simulation_active;
+            pthread_mutex_unlock(&g_data.g_data_mutex);
+
+            // Jeżeli symulacja się skończyła
+            if (!active2) {
+                printf("[PLANE] (Lot %d) Symulacja nieaktywna.\n", flight_no);
+                goto plane_end; // break z pętli while(1) -> break z pętli głównej
+            }
+
+            // Jeśli samolot pełny -> start
+            if (plane_now >= capacity) {
+                printf("[PLANE] (Lot %d) Samolot pełny (%d/%d). Start wcześniej!\n",
+                       flight_no, plane_now, capacity);
+                break;
+            }
+
+            // Jeśli minął T1 -> start
+            if (elapsed >= g_data.takeoff_time) {
+                printf("[PLANE] (Lot %d) Minęło %d sek, startujemy!\n",
+                       flight_no, elapsed);
+                break;
+            }
+
+            // A może wszyscy pasażerowie już skończyli
+            if (fin2 >= tot2) {
+                printf("[PLANE] (Lot %d) Wszyscy pasażerowie (%d/%d) -> start z kim jest.\n",
+                       flight_no, fin2, tot2);
+                break;
+            }
+        }
+
+        // Gdy zdecydowaliśmy o starcie -> blokujemy wejście do tego samolotu
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        g_data.plane_in_flight = 1; // samolot "zamknięty" - spóźnialscy czekają na nowy
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        // Dajemy 2 sek. aby "zakończyć" ewentualne wejścia w trakcie
+        // (ci, co wejdą w tym momencie, zobaczą plane_in_flight=1 i poczekają)
+        sleep(2);
+
+        // Pobieramy finalną liczbę pasażerów
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        int plane_final = g_data.people_in_plane;
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        printf("[PLANE] (Lot %d) Odlatuję z %d pasażerami.\n", flight_no, plane_final);
+        sleep(4); // symulacja lotu
+        printf("[PLANE] (Lot %d) Wróciłem. Pasażerowie wysiadają (licznik zerujemy przy nast. locie).\n", flight_no);
     }
 
+plane_end:
+    printf("[PLANE] Kończę wątek samolotu - nie będzie więcej lotów.\n");
     pthread_exit(NULL);
 }
 
@@ -267,37 +362,36 @@ void *passenger_generator_thread(void *arg)
         pthread_mutex_lock(&g_data.g_data_mutex);
         int current_count = g_data.generated_count;
         int max_count = g_data.total_passengers;
+        int active = g_data.is_simulation_active;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
-        if (current_count >= max_count) {
-            printf("[GENERATOR] Wygenerowano wszystkich %d pasażerów.\n", max_count);
-            // NIE ustawiamy is_simulation_active=0
-            // bo czekamy na to, aż wszyscy skończą
+        if (!active) {
+            printf("[GENERATOR] Symulacja nieaktywna - kończę.\n");
             break;
         }
 
-        /* Losowo "odczekaj" przed stworzeniem kolejnego pasazera */
-        int wait_time = rand() % 2 + 1;
-        sleep(wait_time);
+        if (current_count >= max_count) {
+            printf("[GENERATOR] Wygenerowano wszystkich %d pasażerów.\n", max_count);
+            break;
+        }
 
-        /* Tworzymy nowy watek pasazera */
+        sleep((rand() % 2) + 1);
+
         pthread_t th_passenger;
         int *passenger_id = malloc(sizeof(int));
         if (!passenger_id) {
-            perror("malloc() error");
+            perror("malloc(passenger_id)");
             continue;
         }
-
         *passenger_id = current_count + 1;
 
         if (pthread_create(&th_passenger, NULL, passenger_thread, passenger_id) != 0) {
-            perror("pthread_create(passenger) error");
+            perror("pthread_create(passenger)");
             free(passenger_id);
             continue;
         }
-
         if (pthread_detach(th_passenger) != 0) {
-            perror("pthread_detach(passenger) error");
+            perror("pthread_detach(passenger)");
         }
 
         pthread_mutex_lock(&g_data.g_data_mutex);
@@ -305,7 +399,7 @@ void *passenger_generator_thread(void *arg)
         pthread_mutex_unlock(&g_data.g_data_mutex);
     }
 
-    printf("[GENERATOR] Koncze prace.\n");
+    printf("[GENERATOR] Kończę.\n");
     pthread_exit(NULL);
 }
 
@@ -321,42 +415,33 @@ void *passenger_thread(void *arg)
     printf("[PASSENGER %d] Jestem watkiem pasazera (bagaz=%d kg, VIP=%d, gender=%d)\n",
            my_id, bag_weight, is_vip, gender);
 
-    printf("[PASSENGER %d] Czeka na dostep do stanowiska odprawy...\n", my_id);
-
+    /**** Odprawa bagażowa ****/
     if (sem_wait(g_data.baggage_check_sem) != 0) {
-        perror("sem_wait(baggage_check_sem) error");
-        pthread_exit(NULL);
+        perror("sem_wait(baggage_check_sem)");
+        goto finish_passenger;
     }
-
-    printf("[PASSENGER %d] Jestem w odprawie bagazowej...\n", my_id);
+    printf("[PASSENGER %d] Odprawa bagażowa...\n", my_id);
     sleep(1);
 
-    int limit = g_data.baggage_limit;
-    if (bag_weight > limit) {
-        printf("[PASSENGER %d] ODRZUCONY - bagaż %d > limit %d.\n",
-               my_id, bag_weight, limit);
-
+    if (bag_weight > g_data.baggage_limit) {
+        printf("[PASSENGER %d] Odrzucony (bagaż %d > %d)\n", my_id, bag_weight, g_data.baggage_limit);
         sem_post(g_data.baggage_check_sem);
-        pthread_exit(NULL);
+        goto finish_passenger;
     }
-
     printf("[PASSENGER %d] Odprawa OK.\n", my_id);
-
     sem_post(g_data.baggage_check_sem);
 
-    // Kontrola bezpieczeństwa
+    /**** 2) Kontrola bezpieczeństwa ****/
     enter_security_check(gender);
 
-    /* Po kontroli bezpieczeństwa pasażer trafia do 'holu' (tu: od razu na schody) */
-    enter_stairs(my_id);
+    /**** 3) Schody -> Samolot ****/
+    enter_stairs_and_plane(my_id);
 
-    // po przejściu kontroli bezpieczeństwa...
-    printf("[PASSENGER %d] Przeszedł kontrolę bezpieczeństwa, czeka na samolot...\n", my_id);
-
-    // w przyszłości: czeka w holu, idzie na schody, itp.
+    printf("[PASSENGER %d] W samolocie, czeka na odlot.\n", my_id);
     sleep(1);
 
-    // Sygnalizujemy, że pasażer skończył (niezależnie, czy odrzucony, czy doszedł do końca)
+finish_passenger:
+    // Sygnalizujemy, że pasażer skończył (niezależnie od wyniku)
     pthread_mutex_lock(&g_data.g_data_mutex);
     g_data.finished_passengers++;
     pthread_mutex_unlock(&g_data.g_data_mutex);
@@ -375,92 +460,96 @@ void enter_security_check(int gender)
     while (1) {
         int found_station = -1;
 
-        /* Szukamy stanowiska, do którego możemy wejść */
         pthread_mutex_lock(&g_data.station_mutex);
-
         for (int i = 0; i < SECURITY_STATIONS; i++) {
-            int st_gender    = g_data.station_gender[i];
-            int st_occupancy = g_data.station_occupancy[i];
-
-            if (st_gender == -1) {
-                // puste stanowisko -> rezerwujemy dla danej płci
+            if (g_data.station_gender[i] == -1) {
                 g_data.station_gender[i] = gender;
                 found_station = i;
                 break;
-            } else if (st_gender == gender && st_occupancy < 2) {
-                // ta sama płeć i jest jeszcze miejsce (max 2)
+            }
+            else if (g_data.station_gender[i] == gender &&
+                     g_data.station_occupancy[i] < 2) {
                 found_station = i;
                 break;
             }
         }
-
         pthread_mutex_unlock(&g_data.station_mutex);
 
         if (found_station >= 0) {
-            // Mamy stację, próbujemy semafora
             if (sem_wait(g_data.security_sem[found_station]) != 0) {
-                perror("sem_wait(security_sem)");
-                // w razie błędu ponawiamy
+                perror("sem_wait(security_sem[found_station])");
                 continue;
             }
 
-            // Udało się przejąć semafor -> wchodzimy
             pthread_mutex_lock(&g_data.station_mutex);
-            g_data.station_occupancy[found_station]++;  // pasażer doszedł
-            int occupancy_now = g_data.station_occupancy[found_station];
+            g_data.station_occupancy[found_station]++;
+            int occ_now = g_data.station_occupancy[found_station];
             pthread_mutex_unlock(&g_data.station_mutex);
 
-            printf("[SECURITY] Pasażer(gender=%d) WCHODZI do st.%d (occupancy=%d)\n",
-                   gender, found_station, occupancy_now);
+            printf("[SECURITY] Pasażer(gender=%d) WCHODZI st.%d (occ=%d)\n",
+                   gender, found_station, occ_now);
 
-            // Symulacja kontroli
-            sleep(1);
+            sleep(1); // kontrola
 
-            // Wychodzimy
             if (sem_post(g_data.security_sem[found_station]) != 0) {
-                perror("sem_post(security_sem)");
+                perror("sem_post(security_sem[found_station])");
             }
 
-            // Zmniejszamy liczbę osób
             pthread_mutex_lock(&g_data.station_mutex);
             g_data.station_occupancy[found_station]--;
             int occ_after = g_data.station_occupancy[found_station];
-
             if (occ_after == 0) {
-                // Zwolnione całkowicie
                 g_data.station_gender[found_station] = -1;
                 printf("[SECURITY] Stanowisko %d PUSTE.\n", found_station);
             }
             pthread_mutex_unlock(&g_data.station_mutex);
 
-            printf("[SECURITY] Pasażer(gender=%d) WYCHODZI z st.%d (occupancy=%d)\n",
+            printf("[SECURITY] Pasażer(gender=%d) WYCHODZI st.%d (occ=%d)\n",
                    gender, found_station, occ_after);
-
-            // Kończymy -> pasażer przeszedł kontrolę
-            return;
+            return; // koniec kontroli
         }
 
-        // Nie znaleźliśmy stacji -> czekamy i ponawiamy
+        // Brak pasującej stacji, czekamy
         sleep(1);
     }
 }
 
-void enter_stairs(int id)
+/*******************************************************
+ * enter_stairs_and_plane(id)
+ * -> czekamy na schody, schodzimy,
+ * -> sprawdzamy, czy samolot nie jest w locie (plane_in_flight)
+ *    jeśli jest, czekamy na nowy
+ * -> increment people_in_plane
+ *******************************************************/
+void enter_stairs_and_plane(int id)
 {
-    // Pasażer czeka, aż będzie miejsce na schodach
     if (sem_wait(g_data.stairs_sem) != 0) {
         perror("sem_wait(stairs_sem)");
-        return; // błąd
+        return;
     }
-
-    printf("[STAIRS Pass %d] Pasażer WCHODZI na schody\n", id);
-    // Symulujemy wchodzenie (np. 2 sekundy)
+    printf("[STAIRS] Pasażer %d WCHODZI na schody\n", id);
     sleep(2);
-
-    printf("[STAIRS Pass %d] Pasażer ZSZEDŁ ze schodów\n", id);
-
-    // Zwolnienie schodów
+    printf("[STAIRS] Pasażer %d ZSZEDŁ ze schodów\n", id);
     if (sem_post(g_data.stairs_sem) != 0) {
         perror("sem_post(stairs_sem)");
+    }
+
+    while (1) {
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        int in_flight = g_data.plane_in_flight;
+        if (in_flight == 0) {
+            // OK - możemy wsiadać do bieżącego samolotu
+            g_data.people_in_plane++;
+            int now_in_plane = g_data.people_in_plane;
+            pthread_mutex_unlock(&g_data.g_data_mutex);
+
+            printf("[PLANE] Pasażer %d zajął miejsce w samolocie (inPlane=%d)\n", id, now_in_plane);
+            break;
+        } else {
+            // Samolot właśnie startuje -> czekamy na kolejny
+            pthread_mutex_unlock(&g_data.g_data_mutex);
+            printf("[PLANE] Pasażer %d spóźnił się na obecny lot, czeka na nowy samolot.\n", id);
+            sleep(1);
+        }
     }
 }
