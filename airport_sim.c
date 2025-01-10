@@ -65,7 +65,7 @@ void *passenger_generator_thread(void *arg);
 /* Kazdy Pasazer tez bedzie watkiem */
 void *passenger_thread(void *arg);
 
-void enter_security_check(int gender);
+void enter_security_check(int gender, int is_vip);
 void enter_stairs_and_plane(int id);
 
 static void safe_sem_unlink(const char *name)
@@ -432,7 +432,7 @@ void *passenger_thread(void *arg)
     sem_post(g_data.baggage_check_sem);
 
     /**** 2) Kontrola bezpieczeństwa ****/
-    enter_security_check(gender);
+    enter_security_check(gender, is_vip);
 
     /**** 3) Schody -> Samolot ****/
     enter_stairs_and_plane(my_id);
@@ -451,33 +451,61 @@ finish_passenger:
 }
 
 /* =====================================================
-   enter_security_check(gender)
+   enter_security_check(gender, vip)
    - Utrzymujemy 'station_occupancy[i]'
    - Jeśli occupancy == 0 -> station_gender[i] = -1
    ===================================================== */
-void enter_security_check(int gender)
+void enter_security_check(int gender, int is_vip)
 {
     while (1) {
         int found_station = -1;
 
         pthread_mutex_lock(&g_data.station_mutex);
-        for (int i = 0; i < SECURITY_STATIONS; i++) {
-            if (g_data.station_gender[i] == -1) {
-                g_data.station_gender[i] = gender;
-                found_station = i;
-                break;
-            }
-            else if (g_data.station_gender[i] == gender &&
-                     g_data.station_occupancy[i] < 2) {
-                found_station = i;
-                break;
+
+        // *** VIP najpierw ***
+        if (is_vip) {
+            // Najpierw spróbujmy znaleźć jakiekolwiek wolne stanowisko (nawet, jeśli stoi tam inna płeć, ale ma occupancy=0)
+            // lub takie z tą samą płcią i occupancy=1
+            for (int i = 0; i < SECURITY_STATIONS; i++) {
+                if (g_data.station_occupancy[i] < 2) {
+                    // jeśli puste (gender=-1) lub zgodny gender i occupancy=1
+                    if (g_data.station_gender[i] == -1) {
+                        g_data.station_gender[i] = gender;
+                        found_station = i;
+                        break;
+                    }
+                    else if (g_data.station_gender[i] == gender) {
+                        found_station = i;
+                        break;
+                    }
+                }
             }
         }
+
+        // jeśli nie udało się VIP-owi w powyższym trybie,
+        // albo to nie VIP (is_vip=0), stosujemy normalną logikę
+        if (found_station < 0) {
+            // standardowa pętla
+            for (int i = 0; i < SECURITY_STATIONS; i++) {
+                if (g_data.station_gender[i] == -1) {
+                    g_data.station_gender[i] = gender;
+                    found_station = i;
+                    break;
+                }
+                else if (g_data.station_gender[i] == gender &&
+                         g_data.station_occupancy[i] < 2) {
+                    found_station = i;
+                    break;
+                }
+            }
+        }
+
         pthread_mutex_unlock(&g_data.station_mutex);
 
         if (found_station >= 0) {
+            // mamy stację
             if (sem_wait(g_data.security_sem[found_station]) != 0) {
-                perror("sem_wait(security_sem[found_station])");
+                perror("sem_wait(security_sem)");
                 continue;
             }
 
@@ -486,13 +514,18 @@ void enter_security_check(int gender)
             int occ_now = g_data.station_occupancy[found_station];
             pthread_mutex_unlock(&g_data.station_mutex);
 
-            printf("[SECURITY] Pasażer(gender=%d) WCHODZI st.%d (occ=%d)\n",
-                   gender, found_station, occ_now);
+            if (is_vip) {
+                printf("[SECURITY] [VIP] Pasażer(gender=%d) WCHODZI st.%d (occ=%d)\n",
+                       gender, found_station, occ_now);
+            } else {
+                printf("[SECURITY] Pasażer(gender=%d) WCHODZI st.%d (occ=%d)\n",
+                       gender, found_station, occ_now);
+            }
 
             sleep(1); // kontrola
 
             if (sem_post(g_data.security_sem[found_station]) != 0) {
-                perror("sem_post(security_sem[found_station])");
+                perror("sem_post(security_sem)");
             }
 
             pthread_mutex_lock(&g_data.station_mutex);
@@ -504,9 +537,15 @@ void enter_security_check(int gender)
             }
             pthread_mutex_unlock(&g_data.station_mutex);
 
-            printf("[SECURITY] Pasażer(gender=%d) WYCHODZI st.%d (occ=%d)\n",
-                   gender, found_station, occ_after);
-            return; // koniec kontroli
+            if (is_vip) {
+                printf("[SECURITY] [VIP] Pasażer(gender=%d) WYCHODZI st.%d (occ=%d)\n",
+                       gender, found_station, occ_after);
+            } else {
+                printf("[SECURITY] Pasażer(gender=%d) WYCHODZI st.%d (occ=%d)\n",
+                       gender, found_station, occ_after);
+            }
+
+            return;
         }
 
         // Brak pasującej stacji, czekamy
