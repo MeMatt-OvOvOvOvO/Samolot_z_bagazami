@@ -5,7 +5,7 @@
 #include "shared.h"
 #include "passenger.h"
 
-void enter_security_check(int gender, int is_vip);
+int enter_security_check(int gender, int is_vip, int passenger_id);
 
 void enter_stairs_and_plane(int id);
 
@@ -93,7 +93,10 @@ void *passenger_thread(void *arg)
     sem_post(g_data.baggage_check_sem);
 
     /* Kontrola bezpieczeństwa */
-    enter_security_check(gender, is_vip);
+    if (!enter_security_check(gender, is_vip, my_id)) {
+        // 0 => pasażer odrzucony, kończymy
+        goto finish_passenger;
+    }
 
     /* Schody -> Samolot */
     enter_stairs_and_plane(my_id);
@@ -115,8 +118,10 @@ finish_passenger:
    - Utrzymujemy 'station_occupancy[i]'
    - Jeśli occupancy == 0 -> station_gender[i] = -1
    ===================================================== */
-void enter_security_check(int gender, int is_vip)
+int enter_security_check(int gender, int is_vip, int passenger_id)
 {
+    int wait_count = 0;
+
     while (1) {
         int found_station = -1;
 
@@ -157,53 +162,68 @@ void enter_security_check(int gender, int is_vip)
         pthread_mutex_unlock(&g_data.station_mutex);
 
         if (found_station >= 0) {
+            // stacja znaleziona
             if (sem_wait(g_data.security_sem[found_station]) != 0) {
-                perror("sem_wait(security_sem[found_station])");
+                perror("sem_wait(security_sem)");
                 continue;
             }
+
             pthread_mutex_lock(&g_data.station_mutex);
             g_data.station_occupancy[found_station]++;
-            int occ_now = g_data.station_occupancy[found_station];
+            //int occ_now = g_data.station_occupancy[found_station];
             pthread_mutex_unlock(&g_data.station_mutex);
 
-            if (is_vip) {
-                printf("[SECURITY] [VIP] Pasażer(gender=%d) WCHODZI st.%d (occ=%d)\n",
-                       gender, found_station, occ_now);
-            } else {
-                printf("[SECURITY] Pasażer(gender=%d) WCHODZI st.%d (occ=%d)\n",
-                       gender, found_station, occ_now);
-            }
+            sleep(1);
 
-            sleep(1); // kontrola
+            int dangerous = (rand() % 100 < 5);
+            if (dangerous) {
+                if (sem_post(g_data.security_sem[found_station]) != 0) {
+                    perror("sem_post(security_sem[found_station])");
+                }
 
-            if (sem_post(g_data.security_sem[found_station]) != 0) {
-                perror("sem_post(security_sem[found_station])");
-            }
+                pthread_mutex_lock(&g_data.station_mutex);
+                g_data.station_occupancy[found_station]--;
+                int occ_after = g_data.station_occupancy[found_station];
+                if (occ_after == 0) {
+                    g_data.station_gender[found_station] = -1;
+                    printf("[SECURITY] Stanowisko %d PUSTE.\n", found_station);
+                }
+                pthread_mutex_unlock(&g_data.station_mutex);
 
-            pthread_mutex_lock(&g_data.station_mutex);
-            g_data.station_occupancy[found_station]--;
-            int occ_after = g_data.station_occupancy[found_station];
-            if (occ_after == 0) {
-                g_data.station_gender[found_station] = -1;
-                printf("[SECURITY] Stanowisko %d PUSTE.\n", found_station);
+                printf("[DETAILED] Pasażer %d - WYKRYTO niebezpieczny przedmiot, odrzucony!\n", passenger_id);
+                return 0;
             }
-            pthread_mutex_unlock(&g_data.station_mutex);
+            else {
+                printf("[DETAILED] Pasażer %d - Kontrola OK.\n", passenger_id);
 
-            if (is_vip) {
-                printf("[SECURITY] [VIP] Pasażer(gender=%d) WYCHODZI st.%d (occ=%d)\n",
-                       gender, found_station, occ_after);
-            } else {
-                printf("[SECURITY] Pasażer(gender=%d) WYCHODZI st.%d (occ=%d)\n",
-                       gender, found_station, occ_after);
+                if (sem_post(g_data.security_sem[found_station]) != 0) {
+                    perror("sem_post(security_sem[found_station])");
+                }
+
+                pthread_mutex_lock(&g_data.station_mutex);
+                g_data.station_occupancy[found_station]--;
+                int occ_after = g_data.station_occupancy[found_station];
+                if (occ_after == 0) {
+                    g_data.station_gender[found_station] = -1;
+                    printf("[SECURITY] Stanowisko %d PUSTE.\n", found_station);
+                }
+                pthread_mutex_unlock(&g_data.station_mutex);
+
+                return 1;
             }
-            return;
         }
+        else {
+            // NIE znaleźliśmy stacji (wszystkie zajęte inną płcią lub brak miejsca)
+            wait_count++;
+            if (wait_count > 3) {
+                printf("[SECURITY] Pasażer %d jest zły (czekał dłużej niż 3 razy) i rezygnuje!\n", passenger_id);
+                return 0;
+            }
 
-        // Brak pasującej stacji, czekamy
-        sleep(1);
+            sleep(1);
+        }
     }
 }
-
 /*******************************************************
  * enter_stairs_and_plane(id)
  * -> czekamy na schody, schodzimy,
