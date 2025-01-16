@@ -51,4 +51,22 @@ void setup_signals(void);
 /* Funkcja do ignorowania ENOENT w sem_unlink() */
 void safe_sem_unlink(const char *name);
 
+void enqueue_hall(int passenger_id, int is_vip);
+
+typedef struct hall_node {
+    int passenger_id;
+    int is_vip;
+    char sem_name[64]; // nazwa semafora nazwanego do boardingu
+    sem_t *board_sem; // semafor do odblokowania pasażera
+    struct hall_node *next;
+} hall_node;
+
+/* Dwie kolejki: VIP i normal */
+static hall_node *vip_head = NULL, *vip_tail = NULL;
+static hall_node *normal_head = NULL, *normal_tail = NULL;
+
+static pthread_mutex_t hall_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+hall_node* dequeue_hall(void);
+
 #endif

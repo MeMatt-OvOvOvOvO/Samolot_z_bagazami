@@ -98,6 +98,29 @@ void *passenger_thread(void *arg)
         goto finish_passenger;
     }
 
+    /**** 3) Dodanie do holu (kolejka VIP lub normal), czekanie na boarding ****/
+    enqueue_hall(my_id, is_vip);
+
+    /* Pętla oczekiwania na boarding:
+       - w tym czasie realnie jest w "holu".
+       - czeka na prywatny semafor "/board_sem_<id>",
+         który plane_thread odblokuje w momencie boardowania.
+    */
+    // najpierw otwieramy semafor z tą nazwą:
+    char sem_name[64];
+    snprintf(sem_name, sizeof(sem_name), "/board_sem_%d", my_id);
+    sem_t *board_sem = sem_open(sem_name, 0); // już istnieje, O_CREAT w enqueue
+    if (board_sem == SEM_FAILED) {
+        perror("sem_open(board_sem) w passenger");
+        goto finish_passenger;
+    }
+    // czekamy, aż plane_thread zrobi sem_post
+    sem_wait(board_sem);
+
+    // boarding semafor zwolniony -> wsiadamy na schody
+    sem_close(board_sem);
+    safe_sem_unlink(sem_name);
+
     /* Schody -> Samolot */
     enter_stairs_and_plane(my_id);
 
@@ -105,19 +128,15 @@ void *passenger_thread(void *arg)
     sleep(1);
 
 finish_passenger:
-    pthread_mutex_lock(&g_data.g_data_mutex);
-    g_data.finished_passengers++;
-    pthread_mutex_unlock(&g_data.g_data_mutex);
 
-    printf("[PASSENGER %d] Kończy.\n", my_id);
+
+    printf("[PASSENGER %d] Kończy wątek pasażera...\n", my_id);
     pthread_exit(NULL);
 }
 
-/* =====================================================
-   enter_security_check(gender, vip)
-   - Utrzymujemy 'station_occupancy[i]'
-   - Jeśli occupancy == 0 -> station_gender[i] = -1
-   ===================================================== */
+/*******************************************************
+ * enter_security_check(): czeka max 3 razy, VIP nie rośnie wait_count
+ *******************************************************/
 int enter_security_check(int gender, int is_vip, int passenger_id)
 {
     int wait_count = 0;
@@ -126,104 +145,71 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
         int found_station = -1;
 
         pthread_mutex_lock(&g_data.station_mutex);
-
-        if (is_vip) {
-            // spróbuj wcisnąć się w dowolne stanowisko
-            for (int i = 0; i < SECURITY_STATIONS; i++) {
-                if (g_data.station_occupancy[i] < 2) {
-                    if (g_data.station_gender[i] == -1) {
-                        g_data.station_gender[i] = gender;
-                        found_station = i;
-                        break;
-                    }
-                    else if (g_data.station_gender[i] == gender) {
-                        found_station = i;
-                        break;
-                    }
-                }
+        for (int i = 0; i < SECURITY_STATIONS; i++) {
+            if (g_data.station_gender[i] == -1) {
+                g_data.station_gender[i] = gender;
+                found_station = i;
+                break;
             }
-        }
-
-        if (found_station < 0) {
-            // normalna ścieżka
-            for (int i = 0; i < SECURITY_STATIONS; i++) {
-                if (g_data.station_gender[i] == -1) {
-                    g_data.station_gender[i] = gender;
-                    found_station = i;
-                    break;
-                }
-                else if (g_data.station_gender[i] == gender &&
-                         g_data.station_occupancy[i] < 2) {
-                    found_station = i;
-                    break;
-                }
+            else if (g_data.station_gender[i] == gender &&
+                     g_data.station_occupancy[i] < 2) {
+                found_station = i;
+                break;
             }
         }
         pthread_mutex_unlock(&g_data.station_mutex);
 
         if (found_station >= 0) {
-            // stacja znaleziona
+            // Zajmujemy stanowisko
             if (sem_wait(g_data.security_sem[found_station]) != 0) {
                 perror("sem_wait(security_sem)");
                 continue;
             }
-
             pthread_mutex_lock(&g_data.station_mutex);
             g_data.station_occupancy[found_station]++;
-            //int occ_now = g_data.station_occupancy[found_station];
+            int occ_now = g_data.station_occupancy[found_station];
             pthread_mutex_unlock(&g_data.station_mutex);
 
+            printf("[SECURITY] Pasażer %d (gender=%d%s) WCHODZI do st.%d (occ=%d)\n",
+                   passenger_id, gender, (is_vip ? " [VIP]" : ""), found_station, occ_now);
+
+            /* Symulacja kontroli */
             sleep(1);
 
-            int dangerous = (rand() % 100 < 5);
-            if (dangerous) {
-                if (sem_post(g_data.security_sem[found_station]) != 0) {
-                    perror("sem_post(security_sem[found_station])");
-                }
-
-                pthread_mutex_lock(&g_data.station_mutex);
-                g_data.station_occupancy[found_station]--;
-                int occ_after = g_data.station_occupancy[found_station];
-                if (occ_after == 0) {
-                    g_data.station_gender[found_station] = -1;
-                    printf("[SECURITY] Stanowisko %d PUSTE.\n", found_station);
-                }
-                pthread_mutex_unlock(&g_data.station_mutex);
-
-                printf("[DETAILED] Pasażer %d - WYKRYTO niebezpieczny przedmiot, odrzucony!\n", passenger_id);
-                return 0;
+            // Zwolnienie
+            if (sem_post(g_data.security_sem[found_station]) != 0) {
+                perror("sem_post(security_sem)");
             }
-            else {
-                printf("[DETAILED] Pasażer %d - Kontrola OK.\n", passenger_id);
-
-                if (sem_post(g_data.security_sem[found_station]) != 0) {
-                    perror("sem_post(security_sem[found_station])");
-                }
-
-                pthread_mutex_lock(&g_data.station_mutex);
-                g_data.station_occupancy[found_station]--;
-                int occ_after = g_data.station_occupancy[found_station];
-                if (occ_after == 0) {
-                    g_data.station_gender[found_station] = -1;
-                    printf("[SECURITY] Stanowisko %d PUSTE.\n", found_station);
-                }
-                pthread_mutex_unlock(&g_data.station_mutex);
-
-                return 1;
+            pthread_mutex_lock(&g_data.station_mutex);
+            g_data.station_occupancy[found_station]--;
+            int occ_after = g_data.station_occupancy[found_station];
+            if (occ_after == 0) {
+                g_data.station_gender[found_station] = -1;
+                printf("[SECURITY] Stanowisko %d PUSTE.\n", found_station);
             }
+            pthread_mutex_unlock(&g_data.station_mutex);
+
+            printf("[SECURITY] Pasażer %d WYCHODZI z st.%d (occ=%d)\n",
+                   passenger_id, found_station, occ_after);
+
+            return 1;  // OK
         }
         else {
-            // NIE znaleźliśmy stacji (wszystkie zajęte inną płcią lub brak miejsca)
-            wait_count++;
-            if (wait_count > 3) {
-                printf("[SECURITY] Pasażer %d jest zły (czekał dłużej niż 3 razy) i rezygnuje!\n", passenger_id);
-                return 0;
+            // Brak wolnego miejsca
+            if (!is_vip) {
+                wait_count++;
+                if (wait_count > 3) {
+                    printf("[SECURITY] Pasażer %d jest zły (czekał %d razy) i rezygnuje!\n",
+                           passenger_id, wait_count);
+                    return 0;  // rezygnuje
+                }
             }
-
             sleep(1);
         }
     }
 }
+
+
 /*******************************************************
  * enter_stairs_and_plane(id)
  * -> czekamy na schody, schodzimy,
@@ -231,39 +217,26 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
  *    jeśli jest, czekamy na nowy
  * -> increment people_in_plane
  *******************************************************/
-void enter_stairs_and_plane(int id)
+void enter_stairs_and_plane(int passenger_id)
 {
-    while (1) {
-        pthread_mutex_lock(&g_data.g_data_mutex);
-        int in_flight = g_data.plane_in_flight;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
-
-        if (in_flight == 1) {
-            printf("[HALL] Pasażer %d czeka, bo samolot jest w locie...\n", id);
-            sleep(1);
-        } else {
-            // samolot dostępny (in_flight=0)
-            break;
-        }
-    }
-
-    // Teraz można wchodzić na schody
+    // Schody
     if (sem_wait(g_data.stairs_sem) != 0) {
         perror("sem_wait(stairs_sem)");
         return;
     }
-    printf("[STAIRS] Pasażer %d WCHODZI na schody\n", id);
+    printf("[STAIRS] Pasażer %d WCHODZI na schody\n", passenger_id);
     sleep(2);
-    printf("[STAIRS] Pasażer %d ZSZEDŁ ze schodów\n", id);
+    printf("[STAIRS] Pasażer %d ZSZEDŁ ze schodów\n", passenger_id);
     if (sem_post(g_data.stairs_sem) != 0) {
         perror("sem_post(stairs_sem)");
     }
 
-    // Zwiększamy licznik w samolocie
+    // Liczba w samolocie
     pthread_mutex_lock(&g_data.g_data_mutex);
     g_data.people_in_plane++;
     int now_in_plane = g_data.people_in_plane;
     pthread_mutex_unlock(&g_data.g_data_mutex);
 
-    printf("[PLANE] Pasażer %d zajął miejsce (inPlane=%d)\n", id, now_in_plane);
+    printf("[PLANE] Pasażer %d zajął miejsce (inPlane=%d)\n",
+           passenger_id, now_in_plane);
 }
