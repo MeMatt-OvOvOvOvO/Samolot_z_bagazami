@@ -27,7 +27,7 @@ void *dispatcher_thread(void *arg)
 
         print_hall_queues();
 
-        if (check_counter == 15) {
+        if (check_counter == 20) {
             // Po 15 sek -> przyspiesz start
             printf("[DISPATCHER] Wysyłam sygnał SIGUSR1, by przyspieszyć lot.\n");
             raise(SIGUSR1);

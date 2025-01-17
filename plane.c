@@ -26,14 +26,9 @@ void *plane_thread(void *arg)
         }
 
         flight_no++;
-        pthread_mutex_lock(&g_data.g_data_mutex);
-        g_data.people_in_plane = 0;
-        g_data.plane_in_flight = 0;   // samolot dostępny (drzwi otwarte)
-        g_data.plane_start_earlier = 0;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
-
         int delay = rand() % 4;  // 0..3
         pthread_mutex_lock(&g_data.g_data_mutex);
+        g_data.plane_start_earlier = 0;
         g_data.plane_ready = delay;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
@@ -42,7 +37,12 @@ void *plane_thread(void *arg)
 
         sleep(delay);
 
-        printf("[PLANE] (Lot %d) Rozpoczynam boarding (po opóźnieniu %d sek) czeka max %d sek lub do zapełnienia..\n",
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        g_data.people_in_plane = 0;
+        g_data.plane_in_flight = 0;   // samolot dostępny (drzwi otwarte)
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        printf("[PLANE] (Lot %d) Rozpoczynam boarding (po zakonczeniu opóźnienia %d sek) czeka max %d sek lub do zapełnienia..\n",
                flight_no, delay, g_data.takeoff_time);
 
         int elapsed = 0;

@@ -245,47 +245,105 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
  *******************************************************/
 int enter_stairs_and_plane(int passenger_id, int is_vip)
 {
-    if (sem_wait(g_data.stairs_sem) != 0) {
-        perror("sem_wait(stairs_sem)");
-        return 0;
-    }
-    printf("[STAIRS] Pasażer %d WCHODZI na schody\n", passenger_id);
-    sleep(2);
-	pthread_mutex_lock(&g_data.g_data_mutex);
-    int plane_state = g_data.plane_in_flight;
+    pthread_mutex_lock(&g_data.g_data_mutex);
+    int current_stairs = g_data.stairs_occupancy;
+    int capacity_stairs = g_data.stairs_capacity;
     pthread_mutex_unlock(&g_data.g_data_mutex);
 
-    if (plane_state == 0) {
-        printf("[STAIRS] Pasażer %d ZSZEDŁ ze schodów (samolot dostępny)\n", passenger_id);
-
-        if (sem_post(g_data.stairs_sem) != 0) {
-            perror("sem_post(stairs_sem)");
-        }
-
-        // Zwiększamy licznik w samolocie
-        pthread_mutex_lock(&g_data.g_data_mutex);
-        g_data.people_in_plane++;
-        int now_in_plane = g_data.people_in_plane;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
-
-        printf("[PLANE] Pasażer %d zajął miejsce (inPlane=%d)\n",
-               passenger_id, now_in_plane);
-
-        return 1;
-    }
-    else {
-        // plane_in_flight == 1 → samolot startuje / w locie
-        printf("[STAIRS] Pasażer %d ZSZEDŁ ze schodów, ale samolot rusza – WRACA do holu.\n",
-               passenger_id);
-
-        // Zwolnienie schodów
-        if (sem_post(g_data.stairs_sem) != 0) {
-            perror("sem_post(stairs_sem)");
-        }
-
-        // Dodaj do holu (kolejki) VIP albo normal
+    if (current_stairs >= capacity_stairs) {
+        printf("[STAIRS] Pasażer %d (VIP=%d) widzi pełne schody (occ=%d/%d), wraca do holu.\n",
+               passenger_id, is_vip, current_stairs, capacity_stairs);
         enqueue_hall(passenger_id, is_vip);
-
         return 0;
     }
+
+    pthread_mutex_lock(&g_data.g_data_mutex);
+    g_data.stairs_occupancy++;
+    int now_stairs = g_data.stairs_occupancy;
+    pthread_mutex_unlock(&g_data.g_data_mutex);
+
+    printf("[STAIRS] Pasażer %d (VIP=%d) WCHODZI na schody (occ=%d/%d)\n",
+           passenger_id, is_vip, now_stairs, capacity_stairs);
+
+    if (sem_wait(g_data.stairs_sem) != 0) {
+        perror("sem_wait(stairs_sem)");
+        // w razie błędu:
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        g_data.stairs_occupancy--;
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        enqueue_hall(passenger_id, is_vip);
+        return 0;
+    }
+
+    sleep(2);
+    printf("[STAIRS] Pasażer %d ZSZEDŁ ze schodów.\n", passenger_id);
+
+    pthread_mutex_lock(&g_data.g_data_mutex);
+    int plane_state = g_data.plane_in_flight;  // 0=otwarty, 1=w locie
+    int plane_now = g_data.people_in_plane;
+    int plane_cap = g_data.plane_capacity;
+    pthread_mutex_unlock(&g_data.g_data_mutex);
+
+    // Jeśli samolot startuje -> wracamy do holu
+    if (plane_state == 1) {
+        printf("[STAIRS] Pasażer %d (VIP=%d) spóźnił się na samolot, wraca do holu.\n",
+               passenger_id, is_vip);
+
+        // Zwolnij schody
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        g_data.stairs_occupancy--;
+        int now_stairs2 = g_data.stairs_occupancy;
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        if (sem_post(g_data.stairs_sem) != 0) {
+            perror("sem_post(stairs_sem)");
+        }
+
+        printf("[STAIRS] (occ=%d) -> Pasażer %d (VIP=%d) wraca do holu.\n",
+               now_stairs2, passenger_id, is_vip);
+
+        enqueue_hall(passenger_id, is_vip);
+        return 0;
+    }
+
+    // Samolot otwarty (plane_state=0), ale trzeba sprawdzić, czy nie jest już pełny
+    if (plane_now >= plane_cap) {
+        // Samolot jest co prawda otwarty, ale już PEŁNY
+        printf("[STAIRS] Pasażer %d (VIP=%d) widzi PEŁNY samolot (%d/%d), wraca do holu.\n",
+               passenger_id, is_vip, plane_now, plane_cap);
+
+        // Zwolnij schody
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        g_data.stairs_occupancy--;
+        int now_stairs2 = g_data.stairs_occupancy;
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        if (sem_post(g_data.stairs_sem) != 0) {
+            perror("sem_post(stairs_sem)");
+        }
+
+        printf("[STAIRS] (occ=%d) -> Pasażer %d (VIP=%d) wraca do holu.\n",
+               now_stairs2, passenger_id, is_vip);
+
+        enqueue_hall(passenger_id, is_vip);
+        return 0;
+    }
+
+    // Tutaj samolot otwarty i NIEpełny => wchodzimy
+    pthread_mutex_lock(&g_data.g_data_mutex);
+    g_data.people_in_plane++;
+    plane_now = g_data.people_in_plane;
+    g_data.stairs_occupancy--;
+    now_stairs = g_data.stairs_occupancy;
+    pthread_mutex_unlock(&g_data.g_data_mutex);
+
+    if (sem_post(g_data.stairs_sem) != 0) {
+        perror("sem_post(stairs_sem)");
+    }
+
+    printf("[PLANE] Pasażer %d (VIP=%d) zajął miejsce (inPlane=%d). Schody occ=%d\n",
+           passenger_id, is_vip, plane_now, now_stairs);
+
+    return 1;
 }

@@ -84,18 +84,34 @@ void enqueue_hall(int passenger_id, int is_vip)
     }
 
     pthread_mutex_lock(&hall_mutex);
+
+    if (is_passenger_in_hall(passenger_id)) {
+        // Już jest w kolejce, nie dodajemy go ponownie
+        pthread_mutex_unlock(&hall_mutex);
+        return;
+    }
+
+    // Tworzymy nowy węzeł
+//    hall_node *node = malloc(sizeof(hall_node));
+    if (!node) {
+        perror("malloc(hall_node)");
+        pthread_mutex_unlock(&hall_mutex);
+        return;
+    }
+    node->passenger_id = passenger_id;
+    node->is_vip = is_vip;
+    node->next = NULL;
+
+    // Dodajemy do odpowiedniej listy
     if (is_vip) {
-        // VIP -> na początek listy VIP
-        if (!vip_head) {
-            vip_head = node;
+        // VIP -> na początek
+        node->next = vip_head;
+        vip_head = node;
+        if (!vip_tail) {
             vip_tail = node;
-        } else {
-            node->next = vip_head;
-            vip_head = node;
         }
-        printf("[HALL] Pasażer %d (VIP) dodany do holu.\n", passenger_id);
     } else {
-        // normal -> na koniec listy normal
+        // Normal -> na koniec
         if (!normal_head) {
             normal_head = node;
             normal_tail = node;
@@ -103,7 +119,6 @@ void enqueue_hall(int passenger_id, int is_vip)
             normal_tail->next = node;
             normal_tail = node;
         }
-        printf("[HALL] Pasażer %d (normal) dodany do holu.\n", passenger_id);
     }
     pthread_mutex_unlock(&hall_mutex);
 }
@@ -157,4 +172,25 @@ void print_hall_queues(void)
     printf("\n");
 
     pthread_mutex_unlock(&hall_mutex);
+}
+
+int is_passenger_in_hall(int pid)
+{
+    // Sprawdzamy listę VIP
+    hall_node *iter = vip_head;
+    while (iter) {
+        if (iter->passenger_id == pid) {
+            return 1; // znaleziony
+        }
+        iter = iter->next;
+    }
+    // Sprawdzamy listę normal
+    iter = normal_head;
+    while (iter) {
+        if (iter->passenger_id == pid) {
+            return 1;
+        }
+        iter = iter->next;
+    }
+    return 0; // nie znaleziony
 }

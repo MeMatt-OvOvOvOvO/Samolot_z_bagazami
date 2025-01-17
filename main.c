@@ -31,6 +31,7 @@ int main(void)
     g_data.plane_in_flight = 0;
     g_data.plane_start_earlier = 0;
     g_data.plane_ready = 0;
+    g_data.stairs_occupancy = 0;
 
     setup_signals();
 
