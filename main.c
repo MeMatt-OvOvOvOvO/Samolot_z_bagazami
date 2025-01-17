@@ -32,6 +32,7 @@ int main(void)
     g_data.plane_start_earlier = 0;
     g_data.plane_ready = 0;
     g_data.stairs_occupancy = 0;
+    g_data.stop_generating = 0;
 
     setup_signals();
 

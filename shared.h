@@ -23,6 +23,7 @@ struct global_data {
     int plane_start_earlier; // 0 = nie, 1 = tak
     int plane_ready;
     int stairs_occupancy;
+    int stop_generating;
 
     /* Flaga: 0 = można wsiadać do bieżącego samolotu
      *        1 = samolot startuje, spóźnieni czekają na nowy

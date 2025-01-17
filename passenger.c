@@ -19,6 +19,7 @@ void *passenger_generator_thread(void *arg)
 
     while (1) {
         pthread_mutex_lock(&g_data.g_data_mutex);
+        int stop_gen = g_data.stop_generating;
         int current_count = g_data.generated_count;
         int max_count = g_data.total_passengers;
         int active = g_data.is_simulation_active;
@@ -28,6 +29,10 @@ void *passenger_generator_thread(void *arg)
             printf("[GENERATOR] Symulacja nieaktywna - kończę.\n");
             break;
         }
+        if (stop_gen) {
+            printf("[GENERATOR] Otrzymano sygnał2 (stop_generating=1) -> nie tworzę nowych pasażerów, kończę.\n");
+            break;
+        }
         if (current_count >= max_count) {
             printf("[GENERATOR] Wygenerowano wszystkich %d pasażerów.\n", max_count);
             break;
@@ -35,14 +40,38 @@ void *passenger_generator_thread(void *arg)
 
         sleep((rand() % 2) + 1);
 
-        pthread_t th_passenger;
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        stop_gen = g_data.stop_generating;
+        current_count = g_data.generated_count;
+        active = g_data.is_simulation_active;
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        if (!active) {
+            printf("[GENERATOR] Symulacja nieaktywna -> kończę (po sleep).\n");
+            break;
+        }
+        if (stop_gen) {
+            printf("[GENERATOR] Sygnał2 w trakcie oczekiwania -> kończę generowanie.\n");
+            break;
+        }
+        if (current_count >= max_count) {
+            printf("[GENERATOR] Wygenerowano wszystkich %d pasażerów (po sleep).\n", max_count);
+            break;
+        }
+
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        int new_id = g_data.generated_count + 1;
+        g_data.generated_count++;
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
         int *passenger_id = malloc(sizeof(int));
         if (!passenger_id) {
             perror("malloc(passenger_id)");
             continue;
         }
-        *passenger_id = current_count + 1;
+        *passenger_id = new_id;
 
+        pthread_t th_passenger;
         if (pthread_create(&th_passenger, NULL, passenger_thread, passenger_id) != 0) {
             perror("pthread_create(passenger)");
             free(passenger_id);
@@ -51,10 +80,6 @@ void *passenger_generator_thread(void *arg)
         if (pthread_detach(th_passenger) != 0) {
             perror("pthread_detach(passenger)");
         }
-
-        pthread_mutex_lock(&g_data.g_data_mutex);
-        g_data.generated_count++;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
     }
 
     printf("[GENERATOR] Kończę.\n");
