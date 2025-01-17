@@ -129,3 +129,32 @@ hall_node *dequeue_hall(void)
     pthread_mutex_unlock(&hall_mutex);
     return res;
 }
+
+void print_hall_queues(void)
+{
+    pthread_mutex_lock(&hall_mutex);
+
+    printf("[HALL] VIP queue: ");
+    hall_node *iter = vip_head;
+    if (!iter) {
+        printf("(pusto)");
+    }
+    while (iter) {
+        printf(" -> P%d(VIP=%d)", iter->passenger_id, iter->is_vip);
+        iter = iter->next;
+    }
+    printf("\n");
+
+    printf("[HALL] Normal queue: ");
+    iter = normal_head;
+    if (!iter) {
+        printf("(pusto)");
+    }
+    while (iter) {
+        printf(" -> P%d(VIP=%d)", iter->passenger_id, iter->is_vip);
+        iter = iter->next;
+    }
+    printf("\n");
+
+    pthread_mutex_unlock(&hall_mutex);
+}

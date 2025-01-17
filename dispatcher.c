@@ -25,6 +25,8 @@ void *dispatcher_thread(void *arg)
         printf("[DISPATCHER] Raport: gen=%d/%d, finished=%d, inPlane=%d\n",
                gen_count, total, finished, ppl_in_plane);
 
+        print_hall_queues();
+
         if (check_counter == 15) {
             // Po 15 sek -> przyspiesz start
             printf("[DISPATCHER] Wysyłam sygnał SIGUSR1, by przyspieszyć lot.\n");

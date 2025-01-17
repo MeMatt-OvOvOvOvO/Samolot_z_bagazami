@@ -21,6 +21,7 @@ struct global_data {
     int people_in_plane;
 
     int plane_start_earlier; // 0 = nie, 1 = tak
+    int plane_ready;
 
     /* Flaga: 0 = można wsiadać do bieżącego samolotu
      *        1 = samolot startuje, spóźnieni czekają na nowy
@@ -68,5 +69,7 @@ static hall_node *normal_head = NULL, *normal_tail = NULL;
 static pthread_mutex_t hall_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 hall_node* dequeue_hall(void);
+
+void print_hall_queues(void);
 
 #endif

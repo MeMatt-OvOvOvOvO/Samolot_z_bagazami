@@ -32,8 +32,18 @@ void *plane_thread(void *arg)
         g_data.plane_start_earlier = 0;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
-        printf("[PLANE] >>> Samolot #%d czeka max %d sek lub do zapełnienia.\n",
-               flight_no, g_data.takeoff_time);
+        int delay = rand() % 4;  // 0..3
+        pthread_mutex_lock(&g_data.g_data_mutex);
+        g_data.plane_ready = delay;
+        pthread_mutex_unlock(&g_data.g_data_mutex);
+
+        printf("[PLANE] (Lot %d) Za chwilę boarding, ale czekam %d sek (plane_ready=%d).\n",
+               flight_no, delay, delay);
+
+        sleep(delay);
+
+        printf("[PLANE] (Lot %d) Rozpoczynam boarding (po opóźnieniu %d sek) czeka max %d sek lub do zapełnienia..\n",
+               flight_no, delay, g_data.takeoff_time);
 
         int elapsed = 0;
         int step = 1;
@@ -122,16 +132,11 @@ void *plane_thread(void *arg)
             sleep(step);
             elapsed += step;
         }
-
+		sleep(2);
         // Samolot startuje -> zamykamy "drzwi"
         pthread_mutex_lock(&g_data.g_data_mutex);
-        g_data.plane_in_flight = 1;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
-
-        sleep(2);
-
-        pthread_mutex_lock(&g_data.g_data_mutex);
         int plane_final = g_data.people_in_plane;
+        g_data.plane_in_flight = 1;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
         if (plane_final == 0) {
@@ -149,7 +154,7 @@ void *plane_thread(void *arg)
 		pthread_mutex_unlock(&g_data.g_data_mutex);
 
 		printf("[PLANE] (Lot %d) Wylądowaliśmy. %d pasażerów doleciało. Samolot wraca (finished=%d/%d).\n",
-       flight_no, plane_final, fin_now, tot);
+       		flight_no, plane_final, fin_now, tot);
         sleep(2);
         printf("[PLANE] (Lot %d) Wróciłem.\n", flight_no);
     }
