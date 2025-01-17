@@ -62,7 +62,7 @@ void setup_signals(void)
 /*******************************************************
  * Funkcje obsługi "holu" - kolejka VIP + normal
  *******************************************************/
-void enqueue_hall(int passenger_id, int is_vip)
+void enqueue_hall(int passenger_id, int is_vip, int bag_weight)
 {
     hall_node *node = malloc(sizeof(hall_node));
     if (!node) {
@@ -71,6 +71,7 @@ void enqueue_hall(int passenger_id, int is_vip)
     }
     node->passenger_id = passenger_id;
     node->is_vip = is_vip;
+    node->bag_weight = bag_weight;
     node->next = NULL;
 
     // generujemy nazwę semafora
@@ -100,6 +101,7 @@ void enqueue_hall(int passenger_id, int is_vip)
     }
     node->passenger_id = passenger_id;
     node->is_vip = is_vip;
+    node->bag_weight = bag_weight;
     node->next = NULL;
 
     // Dodajemy do odpowiedniej listy
@@ -155,7 +157,7 @@ void print_hall_queues(void)
         printf("(pusto)");
     }
     while (iter) {
-        printf(" -> P%d(VIP=%d)", iter->passenger_id, iter->is_vip);
+        printf(" -> P%d(VIP=%d, bw=%d)", iter->passenger_id, iter->is_vip, iter->bag_weight);
         iter = iter->next;
     }
     printf("\n");
@@ -166,7 +168,7 @@ void print_hall_queues(void)
         printf("(pusto)");
     }
     while (iter) {
-        printf(" -> P%d(VIP=%d)", iter->passenger_id, iter->is_vip);
+        printf(" -> P%d(VIP=%d, bw=%d)", iter->passenger_id, iter->is_vip, iter->bag_weight);
         iter = iter->next;
     }
     printf("\n");

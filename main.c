@@ -34,6 +34,9 @@ int main(void)
     g_data.stairs_occupancy = 0;
     g_data.stop_generating = 0;
 
+    g_data.plane_sum_of_luggage = 0;
+    g_data.plane_luggage_capacity = 0;
+
     setup_signals();
 
     /* Inicjujemy losowosc */

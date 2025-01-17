@@ -17,6 +17,7 @@ void *plane_thread(void *arg)
         int finished = g_data.finished_passengers;
         int total = g_data.total_passengers;
         int active = g_data.is_simulation_active;
+        int plane_capacity = g_data.plane_capacity;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
         if (finished >= total || !active) {
@@ -26,14 +27,23 @@ void *plane_thread(void *arg)
         }
 
         flight_no++;
+        int random_factor = 7 + (rand() % 4); // losowo 7..10
+		int plane_luggage_capacity = plane_capacity * random_factor;
+		int plane_sum_of_luggage = 0;
+        int attempt_to_fit_again = 0;
         int delay = rand() % 4;  // 0..3
         pthread_mutex_lock(&g_data.g_data_mutex);
         g_data.plane_start_earlier = 0;
         g_data.plane_ready = delay;
+        g_data.plane_sum_of_luggage = plane_sum_of_luggage;
+    	g_data.plane_luggage_capacity = plane_luggage_capacity;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
         printf("[PLANE] (Lot %d) Za chwilę boarding, ale czekam %d sek (plane_ready=%d).\n",
                flight_no, delay, delay);
+
+        printf("[PLANE] (Lot %d) Maksymalna łączna waga bagażu = %d\n",
+               flight_no, plane_luggage_capacity);
 
         sleep(delay);
 
@@ -64,30 +74,55 @@ void *plane_thread(void *arg)
             }
 
             if (plane_now < capacity) {
-                // Pobieramy jednego pasażera z holu
-                hall_node *hn = dequeue_hall();
-                if (hn) {
-                    // Odblokowujemy semafor board_sem pasażera,
-                    // co pozwoli mu wyjść z sem_wait w passenger_thread
-                    sem_post(hn->board_sem);
-                    // Możemy zamknąć i usunąć semafor od razu
-                    // LUB pozwolić pasażerowi zrobić to samemu:
-                    sem_close(hn->board_sem);
-                    safe_sem_unlink(hn->sem_name);
-                    free(hn);
+    			hall_node *hn = dequeue_hall();
+    			if (hn) {
+        			int pid = hn->passenger_id;
+        			int vip = hn->is_vip;
+        			int bw = hn->bag_weight;
 
-                    // Po sem_post pasażer dopiero w wątku passenger_thread
-                    // wykona enter_stairs_and_plane() i people_in_plane++.
-                    // Potrzebujemy krótkiego odczekania, by inkrement mógł się wykonać:
-                    usleep(100000); // 0.1 sek
+        			// SPRAWDZAMY BAGAŻ:
+        			if (plane_sum_of_luggage + bw <= plane_luggage_capacity) {
+            			printf("[PLANE] (Lot %d) Zapraszam pasażera %d (VIP=%d, bag=%d). ",
+                   			flight_no, pid, vip, bw);
 
-                    // Ponownie sprawdzamy plane_now ...
-                }
-                else {
-                    // Kolejka pusta => nikt nie czeka w holu
-                    // Ale może ktoś jeszcze nie dotarł do holu
-                    // -> czekamy normalnie
-                }
+            			// Odblokowujemy go, by mógł enter_stairs_and_plane()
+            			sem_post(hn->board_sem);
+            			sem_close(hn->board_sem);
+            			safe_sem_unlink(hn->sem_name);
+
+            			free(hn);
+
+            			// Krótkie usleep, by passenger zdążył people_in_plane++.
+            			usleep(100000);
+
+            			// reset attempt:
+            			attempt_to_fit_again = 0;
+        			}else {
+            			// Nie mieści się
+            			printf("[PLANE] (Lot %d) Pasażer %d bag=%d NIE mieści się. Suma=%d, limit=%d\n",
+                   			flight_no, pid, bw, plane_sum_of_luggage, plane_luggage_capacity);
+
+            			// Odkładamy pasażera do holu
+            			enqueue_hall(pid, vip, bw);
+            			free(hn);
+
+            			if (attempt_to_fit_again == 0) {
+                			// Pierwszy raz:
+                			printf("[PLANE] (Lot %d) Jeszcze raz spróbuję wziąć pasażera.\n", flight_no);
+                			attempt_to_fit_again = 1;
+            			} else {
+                			// Drugi pasażer też nie pasuje -> samolot odlatuje
+                			printf("[PLANE] (Lot %d) Drugi pasażer też się nie mieści -> Samolot opóźniony, odlatuje!\n",
+                       			flight_no);
+                			// ustawić plane_in_flight=1, break z pętli boardingu
+                			// (zapewne: break; i potem samolot startuje)
+                			// ...
+            			}
+        			}
+    			}else {
+        			// hol pusty => break lub czekamy?
+        			// ...
+    			}
             }
 
             /* Sprawdzamy warunki startu */
@@ -96,12 +131,13 @@ void *plane_thread(void *arg)
             int start_earlier = g_data.plane_start_earlier;
             finished2 = g_data.finished_passengers;
             active2 = g_data.is_simulation_active;
+        	plane_sum_of_luggage = g_data.plane_sum_of_luggage;
             pthread_mutex_unlock(&g_data.g_data_mutex);
 
             // 1) Pełny?
             if (plane_now >= capacity) {
-                printf("[PLANE] (Lot %d) Pełny (%d/%d). Start!\n",
-                       flight_no, plane_now, capacity);
+                printf("[PLANE] (Lot %d) Pełny (%d/%d). Bagaz %d/%d. Start!\n",
+                       flight_no, plane_now, capacity, plane_sum_of_luggage, plane_luggage_capacity);
                 break;
             }
 
@@ -144,7 +180,8 @@ void *plane_thread(void *arg)
             break;
         }
 
-        printf("[PLANE] (Lot %d) Odlatuję z %d pasażerami.\n", flight_no, plane_final);
+        printf("[PLANE] (Lot %d) Odlatuję z %d pasażerami. Jego bagaz to %d/%d.\n", flight_no, plane_final,
+               plane_sum_of_luggage, plane_luggage_capacity);
         sleep(2);
         pthread_mutex_lock(&g_data.g_data_mutex);
 		g_data.finished_passengers += plane_final;

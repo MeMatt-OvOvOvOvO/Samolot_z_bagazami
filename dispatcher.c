@@ -28,13 +28,13 @@ void *dispatcher_thread(void *arg)
 
         print_hall_queues();
 
-        if (check_counter == 18) {
+        if (check_counter == 17) {//nie bedzie takiej wartosci wiec sie nie wykona
             // Po 18 sek -> przyspiesz start
             printf("[DISPATCHER] Wysyłam sygnał SIGUSR1, by przyspieszyć lot.\n");
             raise(SIGUSR1);
         }
 
-    	if (check_counter == 9) {
+    	if (check_counter == 20) {//nie bedzie takiej wartosci wiec sie nie wykona
     		pthread_mutex_lock(&g_data.g_data_mutex);
     		g_data.stop_generating = 1;
     		pthread_mutex_unlock(&g_data.g_data_mutex);

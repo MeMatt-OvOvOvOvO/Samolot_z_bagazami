@@ -25,6 +25,9 @@ struct global_data {
     int stairs_occupancy;
     int stop_generating;
 
+    int plane_sum_of_luggage;
+    int plane_luggage_capacity;
+
     /* Flaga: 0 = można wsiadać do bieżącego samolotu
      *        1 = samolot startuje, spóźnieni czekają na nowy
      */
@@ -54,11 +57,12 @@ void setup_signals(void);
 /* Funkcja do ignorowania ENOENT w sem_unlink() */
 void safe_sem_unlink(const char *name);
 
-void enqueue_hall(int passenger_id, int is_vip);
+void enqueue_hall(int passenger_id, int is_vip, int bag_weight);
 
 typedef struct hall_node {
     int passenger_id;
     int is_vip;
+    int bag_weight;
     char sem_name[64]; // nazwa semafora nazwanego do boardingu
     sem_t *board_sem; // semafor do odblokowania pasażera
     struct hall_node *next;
