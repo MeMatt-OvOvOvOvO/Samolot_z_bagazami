@@ -93,7 +93,6 @@ void enqueue_hall(int passenger_id, int is_vip, int bag_weight)
     }
 
     // Tworzymy nowy węzeł
-//    hall_node *node = malloc(sizeof(hall_node));
     if (!node) {
         perror("malloc(hall_node)");
         pthread_mutex_unlock(&hall_mutex);
@@ -125,7 +124,7 @@ void enqueue_hall(int passenger_id, int is_vip, int bag_weight)
     pthread_mutex_unlock(&hall_mutex);
 }
 
-/* Pobierz pasażera z kolejki holu:
+/* Pobiera pasażera z kolejki holu:
    - Najpierw sprawdź VIP (od "głowy"),
    - jeśli pusto -> normal
    Zwraca węzeł, albo NULL jeśli obie puste.

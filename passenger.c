@@ -123,14 +123,9 @@ void *passenger_thread(void *arg)
         goto finish_passenger;
     }
 
-    /**** 3) Dodanie do holu (kolejka VIP lub normal), czekanie na boarding ****/
+    /**** Dodanie do holu (kolejka VIP lub normal), czekanie na boarding ****/
     enqueue_hall(my_id, is_vip, bag_weight);
 
-    /* Pętla oczekiwania na boarding:
-       - w tym czasie realnie jest w "holu".
-       - czeka na prywatny semafor "/board_sem_<id>",
-         który plane_thread odblokuje w momencie boardowania.
-    */
     // najpierw otwieramy semafor z tą nazwą:
     char sem_name[64];
     snprintf(sem_name, sizeof(sem_name), "/board_sem_%d", my_id);
@@ -261,14 +256,6 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
     }
 }
 
-
-/*******************************************************
- * enter_stairs_and_plane(id)
- * -> czekamy na schody, schodzimy,
- * -> sprawdzamy, czy samolot nie jest w locie (plane_in_flight)
- *    jeśli jest, czekamy na nowy
- * -> increment people_in_plane
- *******************************************************/
 int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
 {
     pthread_mutex_lock(&g_data.g_data_mutex);

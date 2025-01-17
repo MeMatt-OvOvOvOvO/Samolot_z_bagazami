@@ -120,8 +120,7 @@ void *plane_thread(void *arg)
             			}
         			}
     			}else {
-        			// hol pusty => break lub czekamy?
-        			// ...
+        			// hol pusty
     			}
             }
 
@@ -134,14 +133,14 @@ void *plane_thread(void *arg)
         	plane_sum_of_luggage = g_data.plane_sum_of_luggage;
             pthread_mutex_unlock(&g_data.g_data_mutex);
 
-            // 1) Pełny?
+            // Pełny?
             if (plane_now >= capacity) {
                 printf("[PLANE] (Lot %d) Pełny (%d/%d). Bagaz %d/%d. Start!\n",
                        flight_no, plane_now, capacity, plane_sum_of_luggage, plane_luggage_capacity);
                 break;
             }
 
-            // 2) Sygnał start_earlier
+            // Sygnał start_earlier
             if (start_earlier == 1) {
                 printf("[PLANE] (Lot %d) [SIGUSR1] Startujemy wcześniej!\n", flight_no);
                 pthread_mutex_lock(&g_data.g_data_mutex);
@@ -157,7 +156,7 @@ void *plane_thread(void *arg)
                 break;
             }
 
-            // 4) Wszyscy skończyli, a w samolocie 0?
+            // Wszyscy skończyli, a w samolocie 0?
             if (finished2 >= tot2) {
                 printf("[PLANE] (Lot %d) Wszyscy (%d/%d) skończyli, 0 pasażerów -> koniec.\n",
                        flight_no, finished2, tot2);
