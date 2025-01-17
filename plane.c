@@ -82,7 +82,7 @@ void *plane_thread(void *arg)
 
         			// SPRAWDZAMY BAGAŻ:
         			if (plane_sum_of_luggage + bw <= plane_luggage_capacity) {
-            			printf("[PLANE] (Lot %d) Zapraszam pasażera %d (VIP=%d, bag=%d). ",
+            			printf("[PLANE] (Lot %d) Zapraszam pasażera %d (VIP=%d, bag=%d).\n",
                    			flight_no, pid, vip, bw);
 
             			// Odblokowujemy go, by mógł enter_stairs_and_plane()

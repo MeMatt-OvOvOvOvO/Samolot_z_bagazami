@@ -112,6 +112,9 @@ void *passenger_thread(void *arg)
     if (bag_weight > g_data.baggage_limit) {
         printf("[PASSENGER %d] Odrzucony (bagaż=%d > %d)\n", my_id, bag_weight, g_data.baggage_limit);
         sem_post(g_data.baggage_check_sem);
+        pthread_mutex_lock(&g_data.station_mutex);
+        g_data.finished_passengers++;
+        pthread_mutex_unlock(&g_data.station_mutex);
         goto finish_passenger;
     }
     printf("[PASSENGER %d] Odprawa OK.\n", my_id);
