@@ -7,7 +7,7 @@
 void *dispatcher_thread(void *arg)
 {
     (void)arg;
-    printf("[DISPATCHER] Start.\n");
+    printf(ANSI_COLOR_CYAN"[DISPATCHER] Start.\n" ANSI_COLOR_RESET);
     int check_counter = 0;
 
     while (1) {
@@ -23,14 +23,14 @@ void *dispatcher_thread(void *arg)
     	int stop_gen = g_data.stop_generating;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
-        printf("[DISPATCHER] Raport: gen=%d/%d, finished=%d, inPlane=%d\n",
+        printf(ANSI_COLOR_CYAN"[DISPATCHER] Raport: gen=%d/%d, finished=%d, inPlane=%d\n" ANSI_COLOR_RESET,
                gen_count, total, finished, ppl_in_plane);
 
         print_hall_queues();
 
         if (check_counter == 17) {//nie bedzie takiej wartosci wiec sie nie wykona
             // Po 18 sek -> przyspiesz start
-            printf("[DISPATCHER] Wysyłam sygnał SIGUSR1, by przyspieszyć lot.\n");
+            printf(ANSI_COLOR_CYAN"[DISPATCHER] Wysyłam sygnał SIGUSR1, by przyspieszyć lot.\n" ANSI_COLOR_RESET);
             raise(SIGUSR1);
         }
 
@@ -39,7 +39,7 @@ void *dispatcher_thread(void *arg)
     		g_data.stop_generating = 1;
     		pthread_mutex_unlock(&g_data.g_data_mutex);
 
-    		printf("[DISPATCHER] Otrzymano polecenie (sygnał 2) - zamykam odprawę biletowo-bagażową!\n");
+    		printf(ANSI_COLOR_CYAN"[DISPATCHER] Otrzymano polecenie (sygnał 2) - zamykam odprawę biletowo-bagażową!\n" ANSI_COLOR_RESET);
     	}
 
         // Jeśli wszyscy pasażerowie skończyli – koniec
@@ -54,7 +54,7 @@ void *dispatcher_thread(void *arg)
         		pthread_mutex_lock(&g_data.g_data_mutex);
         		g_data.is_simulation_active = 0;
         		pthread_mutex_unlock(&g_data.g_data_mutex);
-        		printf("[DISPATCHER] Wszyscy pasażerowie (%d) zakończyli.\n", finished);
+        		printf(ANSI_COLOR_CYAN"[DISPATCHER] Wszyscy pasażerowie (%d) zakończyli.\n" ANSI_COLOR_RESET, finished);
         		break;
     		}
     		// jeśli in_plane>0, to czekamy dalej,
@@ -67,16 +67,16 @@ void *dispatcher_thread(void *arg)
     		g_data.is_simulation_active = 0;
     		still_active = g_data.is_simulation_active;
     		pthread_mutex_unlock(&g_data.g_data_mutex);
-    		printf("[DISPATCHER] Sygnał2 i wszyscy (%d) już przewiezieni/obsłużeni -> koniec.\n", finished);
+    		printf(ANSI_COLOR_CYAN"[DISPATCHER] Sygnał2 i wszyscy (%d) już przewiezieni/obsłużeni -> koniec.\n" ANSI_COLOR_RESET, finished);
     		break;
     	}
 
         if (!still_active) {
-            printf("[DISPATCHER] is_simulation_active=0 -> kończę.\n");
+            printf(ANSI_COLOR_CYAN"[DISPATCHER] is_simulation_active=0 -> kończę.\n" ANSI_COLOR_RESET);
             break;
         }
     }
 
-    printf("[DISPATCHER] Kończę wątek.\n");
+    printf(ANSI_COLOR_CYAN"[DISPATCHER] Kończę wątek.\n" ANSI_COLOR_RESET);
     pthread_exit(NULL);
 }

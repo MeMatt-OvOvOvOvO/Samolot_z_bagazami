@@ -7,7 +7,7 @@
 void *plane_thread(void *arg)
 {
     (void)arg;
-    printf("[PLANE] Start - wielokrotne loty.\n");
+    printf(ANSI_COLOR_BLUE"[PLANE] Start - wielokrotne loty.\n" ANSI_COLOR_RESET);
 
     int flight_no = 0;
 
@@ -21,7 +21,7 @@ void *plane_thread(void *arg)
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
         if (finished >= total || !active) {
-            printf("[PLANE] Nie ma potrzeby kolejnego lotu (finished=%d/%d, active=%d).\n",
+            printf(ANSI_COLOR_BLUE"[PLANE] Nie ma potrzeby kolejnego lotu (finished=%d/%d, active=%d).\n" ANSI_COLOR_RESET,
                    finished, total, active);
             break;
         }
@@ -39,10 +39,10 @@ void *plane_thread(void *arg)
     	g_data.plane_luggage_capacity = plane_luggage_capacity;
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
-        printf("[PLANE] (Lot %d) Za chwilę boarding, ale czekam %d sek (plane_ready=%d).\n",
+        printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Za chwilę boarding, ale czekam %d sek (plane_ready=%d).\n" ANSI_COLOR_RESET,
                flight_no, delay, delay);
 
-        printf("[PLANE] (Lot %d) Maksymalna łączna waga bagażu = %d\n",
+        printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Maksymalna łączna waga bagażu = %d\n" ANSI_COLOR_RESET,
                flight_no, plane_luggage_capacity);
 
         sleep(delay);
@@ -52,7 +52,7 @@ void *plane_thread(void *arg)
         g_data.plane_in_flight = 0;   // samolot dostępny (drzwi otwarte)
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
-        printf("[PLANE] (Lot %d) Rozpoczynam boarding (po zakonczeniu opóźnienia %d sek) czeka max %d sek lub do zapełnienia..\n",
+        printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Rozpoczynam boarding (po zakonczeniu opóźnienia %d sek) czeka max %d sek lub do zapełnienia..\n" ANSI_COLOR_RESET,
                flight_no, delay, g_data.takeoff_time);
 
         int elapsed = 0;
@@ -69,7 +69,7 @@ void *plane_thread(void *arg)
             pthread_mutex_unlock(&g_data.g_data_mutex);
 
             if (!active2) {
-                printf("[PLANE] (Lot %d) Symulacja nieaktywna.\n", flight_no);
+                printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Symulacja nieaktywna.\n" ANSI_COLOR_RESET, flight_no);
                 goto plane_end;
             }
 
@@ -82,7 +82,7 @@ void *plane_thread(void *arg)
 
         			// SPRAWDZAMY BAGAŻ:
         			if (plane_sum_of_luggage + bw <= plane_luggage_capacity) {
-            			printf("[PLANE] (Lot %d) Zapraszam pasażera %d (VIP=%d, bag=%d).\n",
+            			printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Zapraszam pasażera %d (VIP=%d, bag=%d).\n" ANSI_COLOR_RESET,
                    			flight_no, pid, vip, bw);
 
             			// Odblokowujemy go, by mógł enter_stairs_and_plane()
@@ -99,7 +99,7 @@ void *plane_thread(void *arg)
             			attempt_to_fit_again = 0;
         			}else {
             			// Nie mieści się
-            			printf("[PLANE] (Lot %d) Pasażer %d bag=%d NIE mieści się. Suma=%d, limit=%d\n",
+            			printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Pasażer %d bag=%d NIE mieści się. Suma=%d, limit=%d\n" ANSI_COLOR_RESET,
                    			flight_no, pid, bw, plane_sum_of_luggage, plane_luggage_capacity);
 
             			// Odkładamy pasażera do holu
@@ -108,11 +108,11 @@ void *plane_thread(void *arg)
 
             			if (attempt_to_fit_again == 0) {
                 			// Pierwszy raz:
-                			printf("[PLANE] (Lot %d) Jeszcze raz spróbuję wziąć pasażera.\n", flight_no);
+                			printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Jeszcze raz spróbuję wziąć pasażera.\n" ANSI_COLOR_RESET, flight_no);
                 			attempt_to_fit_again = 1;
             			} else {
                 			// Drugi pasażer też nie pasuje -> samolot odlatuje
-                			printf("[PLANE] (Lot %d) Drugi pasażer też się nie mieści -> Samolot opóźniony, odlatuje!\n",
+                			printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Drugi pasażer też się nie mieści -> Samolot opóźniony, odlatuje!\n" ANSI_COLOR_RESET,
                        			flight_no);
                 			// ustawić plane_in_flight=1, break z pętli boardingu
                 			// (zapewne: break; i potem samolot startuje)
@@ -135,14 +135,14 @@ void *plane_thread(void *arg)
 
             // Pełny?
             if (plane_now >= capacity) {
-                printf("[PLANE] (Lot %d) Pełny (%d/%d). Bagaz %d/%d. Start!\n",
+                printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Pełny (%d/%d). Bagaz %d/%d. Start!\n" ANSI_COLOR_RESET,
                        flight_no, plane_now, capacity, plane_sum_of_luggage, plane_luggage_capacity);
                 break;
             }
 
             // Sygnał start_earlier
             if (start_earlier == 1) {
-                printf("[PLANE] (Lot %d) [SIGUSR1] Startujemy wcześniej!\n", flight_no);
+                printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) [SIGUSR1] Startujemy wcześniej!\n" ANSI_COLOR_RESET, flight_no);
                 pthread_mutex_lock(&g_data.g_data_mutex);
                 g_data.plane_start_earlier = 0;
                 pthread_mutex_unlock(&g_data.g_data_mutex);
@@ -151,14 +151,14 @@ void *plane_thread(void *arg)
 
             // Jeśli minął T1 -> start
             if (elapsed >= g_data.takeoff_time) {
-                printf("[PLANE] (Lot %d) Minęło %d sek, zaczynamy start. Czekamy na ostatnich pasazerow!\n",
+                printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Minęło %d sek, zaczynamy start. Czekamy na ostatnich pasazerow!\n" ANSI_COLOR_RESET,
                        flight_no, elapsed);
                 break;
             }
 
             // Wszyscy skończyli, a w samolocie 0?
             if (finished2 >= tot2) {
-                printf("[PLANE] (Lot %d) Wszyscy (%d/%d) skończyli, 0 pasażerów -> koniec.\n",
+                printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Wszyscy (%d/%d) skończyli, 0 pasażerów -> koniec.\n" ANSI_COLOR_RESET,
                        flight_no, finished2, tot2);
                 goto plane_end;
             }
@@ -175,11 +175,11 @@ void *plane_thread(void *arg)
         pthread_mutex_unlock(&g_data.g_data_mutex);
 
         if (plane_final == 0) {
-            printf("[PLANE] (Lot %d) 0 pasażerów -> rezygnuję z lotu.\n", flight_no);
+            printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) 0 pasażerów -> rezygnuję z lotu.\n" ANSI_COLOR_RESET, flight_no);
             break;
         }
 
-        printf("[PLANE] (Lot %d) Odlatuję z %d pasażerami. Jego bagaz to %d/%d.\n", flight_no, plane_final,
+        printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Odlatuję z %d pasażerami. Jego bagaz to %d/%d.\n" ANSI_COLOR_RESET, flight_no, plane_final,
                plane_sum_of_luggage, plane_luggage_capacity);
         sleep(2);
         pthread_mutex_lock(&g_data.g_data_mutex);
@@ -189,13 +189,13 @@ void *plane_thread(void *arg)
 		g_data.people_in_plane = 0;  // opróżniamy samolot
 		pthread_mutex_unlock(&g_data.g_data_mutex);
 
-		printf("[PLANE] (Lot %d) Wylądowaliśmy. %d pasażerów doleciało. Samolot wraca (finished=%d/%d).\n",
+		printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Wylądowaliśmy. %d pasażerów doleciało. Samolot wraca (finished=%d/%d).\n" ANSI_COLOR_RESET,
        		flight_no, plane_final, fin_now, tot);
         sleep(2);
-        printf("[PLANE] (Lot %d) Wróciłem.\n", flight_no);
+        printf(ANSI_COLOR_BLUE"[PLANE] (Lot %d) Wróciłem.\n", flight_no);
     }
 
 plane_end:
-    printf("[PLANE] Kończę wątek samolotu - nie będzie więcej lotów.\n");
+    printf(ANSI_COLOR_BLUE"[PLANE] Kończę wątek samolotu - nie będzie więcej lotów.\n" ANSI_COLOR_RESET);
     pthread_exit(NULL);
 }
