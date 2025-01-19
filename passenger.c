@@ -38,7 +38,7 @@ void *passenger_generator_thread(void *arg)
             break;
         }
 
-        sleep((rand() % 2) + 1);
+//        sleep((rand() % 2) + 1);
 
         pthread_mutex_lock(&g_data.g_data_mutex);
         stop_gen = g_data.stop_generating;
@@ -107,13 +107,14 @@ void *passenger_thread(void *arg)
         goto finish_passenger;
     }
     printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odprawa bagażowa...\n" ANSI_COLOR_RESET, my_id);
-    sleep(1);
+//    sleep(1);
 
     if (bag_weight > g_data.baggage_limit) {
         printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odrzucony (bagaż=%d > %d)\n" ANSI_COLOR_RESET, my_id, bag_weight, g_data.baggage_limit);
         sem_post(g_data.baggage_check_sem);
         pthread_mutex_lock(&g_data.station_mutex);
         g_data.finished_passengers++;
+        g_data.passengers_rejected++;
         pthread_mutex_unlock(&g_data.station_mutex);
         goto finish_passenger;
     }
@@ -147,11 +148,11 @@ void *passenger_thread(void *arg)
     /* Schody -> Samolot */
     while (!enter_stairs_and_plane(my_id, is_vip, bag_weight)) {
     	printf(ANSI_COLOR_GREEN"[PASSENGER %d] Nie wsiadłem, samolot startuje, wracam do holu, spróbuję za 1 sek...\n" ANSI_COLOR_RESET, my_id);
-    	sleep(1);
+//    	sleep(1);
 	}
 
     printf(ANSI_COLOR_GREEN"[PASSENGER %d] W samolocie, czeka na odlot.\n" ANSI_COLOR_RESET, my_id);
-    sleep(1);
+//    sleep(1);
 
 finish_passenger:
 
@@ -206,7 +207,7 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
        			occ_now);
 
             /* Symulacja kontroli */
-            sleep(1);
+//            sleep(1);
 
             int dangerous = (rand() % 100 < 5);
             if (dangerous) {
@@ -219,6 +220,7 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                 pthread_mutex_lock(&g_data.station_mutex);
                 g_data.station_occupancy[found_station]--;
                 g_data.finished_passengers++;
+                g_data.passengers_rejected++;
                 int occ_after = g_data.station_occupancy[found_station];
                 if (occ_after == 0) {
                     g_data.station_gender[found_station] = -1;
@@ -260,7 +262,7 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                     return 0;  // rezygnuje
                 }
             }
-            sleep(1);
+//            sleep(1);
         }
     }
 }
@@ -298,7 +300,7 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
         return 0;
     }
 
-    sleep(2);
+//    sleep(2);
     printf(ANSI_COLOR_MAGENTA"[STAIRS] Pasażer %d ZSZEDŁ ze schodów.\n" ANSI_COLOR_RESET, passenger_id);
 
     pthread_mutex_lock(&g_data.g_data_mutex);
@@ -378,6 +380,7 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
     int new_sum = g_data.plane_sum_of_luggage;
     g_data.stairs_occupancy--;
     now_stairs = g_data.stairs_occupancy;
+    pthread_cond_signal(&boarding_cond);
     pthread_mutex_unlock(&g_data.g_data_mutex);
 
     if (sem_post(g_data.stairs_sem) != 0) {

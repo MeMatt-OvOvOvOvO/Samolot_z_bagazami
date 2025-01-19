@@ -26,6 +26,7 @@ int main(void)
 
     g_data.generated_count = 0;
     g_data.finished_passengers = 0;
+    g_data.passengers_rejected = 0;
     g_data.is_simulation_active = 1;
     g_data.people_in_plane = 0;
     g_data.plane_in_flight = 0;

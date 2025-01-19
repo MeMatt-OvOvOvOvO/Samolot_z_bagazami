@@ -8,6 +8,12 @@
 /* Tutaj definicja zmiennej globalnej */
 struct global_data g_data;
 
+pthread_cond_t hall_not_empty_cond  = PTHREAD_COND_INITIALIZER;
+//pthread_mutex_t hall_mutex          = PTHREAD_MUTEX_INITIALIZER;
+
+pthread_cond_t boarding_cond        = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t boarding_mutex      = PTHREAD_MUTEX_INITIALIZER;
+
 /* Funkcja do czyszczenia semaforów */
 void safe_sem_unlink(const char *name)
 {
@@ -45,6 +51,17 @@ static void sigusr1_handler(int signo)
     }
 }
 
+/* Obsługa sygnału SIGUSR2 */
+static void sigusr2_handler(int signo)
+{
+    if (signo == SIGUSR2) {
+    	pthread_mutex_lock(&g_data.g_data_mutex);
+    	g_data.stop_generating = 1;
+    	pthread_mutex_unlock(&g_data.g_data_mutex);
+        fprintf(stderr, "[SIGNAL] Otrzymano SIGUSR2 -> zamykam odprawę biletowo-bagażową!\n");
+    }
+}
+
 /* Inicjalizacja obsługi sygnałów */
 void setup_signals(void)
 {
@@ -55,6 +72,16 @@ void setup_signals(void)
 
     if (sigaction(SIGUSR1, &sa, NULL) == -1) {
         perror("sigaction(SIGUSR1)");
+        exit(EXIT_FAILURE);
+    }
+
+    struct sigaction sa2;
+    memset(&sa2, 0, sizeof(sa2));
+    sa2.sa_handler = sigusr2_handler;
+    sigemptyset(&sa2.sa_mask);
+
+    if (sigaction(SIGUSR2, &sa2, NULL) == -1) {
+        perror("sigaction(SIGUSR2)");
         exit(EXIT_FAILURE);
     }
 }
@@ -85,7 +112,6 @@ void enqueue_hall(int passenger_id, int is_vip, int bag_weight)
     }
 
     pthread_mutex_lock(&hall_mutex);
-
     if (is_passenger_in_hall(passenger_id)) {
         // Już jest w kolejce, nie dodajemy go ponownie
         pthread_mutex_unlock(&hall_mutex);
@@ -122,6 +148,7 @@ void enqueue_hall(int passenger_id, int is_vip, int bag_weight)
         }
     }
     pthread_mutex_unlock(&hall_mutex);
+    pthread_cond_signal(&hall_not_empty_cond);
 }
 
 /* Pobiera pasażera z kolejki holu:

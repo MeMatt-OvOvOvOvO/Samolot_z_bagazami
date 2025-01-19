@@ -22,6 +22,7 @@ struct global_data {
     int total_passengers;
     int generated_count;
     int finished_passengers;
+    int passengers_rejected;
     int is_simulation_active;
 
     int baggage_limit;
@@ -90,5 +91,11 @@ hall_node* dequeue_hall(void);
 void print_hall_queues(void);
 
 int is_passenger_in_hall(int pid);
+
+extern pthread_cond_t hall_not_empty_cond;
+//extern pthread_mutex_t hall_mutex;
+
+extern pthread_cond_t boarding_cond;
+extern pthread_mutex_t boarding_mutex;
 
 #endif
