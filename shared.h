@@ -14,6 +14,10 @@
 
 #include <semaphore.h>
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
+
 
 /* Liczba stanowisk bezpieczeństwa */
 #define SECURITY_STATIONS 3
@@ -40,6 +44,9 @@ struct global_data {
     int plane_sum_of_luggage;
     int plane_luggage_capacity;
 
+    int passengers_mad;
+    int check_counter;
+
     /* Flaga: 0 = można wsiadać do bieżącego samolotu
      *        1 = samolot startuje, spóźnieni czekają na nowy
      */
@@ -55,8 +62,6 @@ struct global_data {
     int station_gender[SECURITY_STATIONS]; // -1=puste, 0=m,1=f
     int station_occupancy[SECURITY_STATIONS];
 
-    pthread_mutex_t station_mutex;
-    pthread_mutex_t g_data_mutex;
 };
 
 /* Deklaracja jednej "global_data" */
@@ -69,8 +74,6 @@ void setup_signals(void);
 /* Funkcja do ignorowania ENOENT w sem_unlink() */
 void safe_sem_unlink(const char *name);
 
-void enqueue_hall(int passenger_id, int is_vip, int bag_weight);
-
 typedef struct hall_node {
     int passenger_id;
     int is_vip;
@@ -81,10 +84,8 @@ typedef struct hall_node {
 } hall_node;
 
 /* Dwie kolejki: VIP i normal */
-static hall_node *vip_head = NULL, *vip_tail = NULL;
-static hall_node *normal_head = NULL, *normal_tail = NULL;
-
-static pthread_mutex_t hall_mutex = PTHREAD_MUTEX_INITIALIZER;
+extern hall_node *vip_head __attribute__((unused)), *vip_tail __attribute__((unused));
+extern hall_node *normal_head __attribute__((unused)), *normal_tail __attribute__((unused));
 
 hall_node* dequeue_hall(void);
 
@@ -92,8 +93,13 @@ void print_hall_queues(void);
 
 int is_passenger_in_hall(int pid);
 
+void enqueue_hall(int passenger_id, int is_vip, int bag_weight);
+
+extern pthread_mutex_t g_data_mutex;
+extern pthread_mutex_t station_mutex;
+
+extern pthread_mutex_t hall_mutex;
 extern pthread_cond_t hall_not_empty_cond;
-//extern pthread_mutex_t hall_mutex;
 
 extern pthread_cond_t boarding_cond;
 extern pthread_mutex_t boarding_mutex;

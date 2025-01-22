@@ -1,6 +1,8 @@
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <time.h>
+#include <errno.h>
 #include "shared.h"
 #include "plane.h"
 
@@ -12,13 +14,13 @@ void *plane_thread(void *arg)
     int flight_no = 0;
 
     while (1) {
-        // Sprawdzenie, czy symulacja nadal aktywna
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        /* Sprawdzenie stanu globalnego */
+        pthread_mutex_lock(&g_data_mutex);
         int finished = g_data.finished_passengers;
         int total = g_data.total_passengers;
         int active = g_data.is_simulation_active;
         int plane_capacity = g_data.plane_capacity;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_unlock(&g_data_mutex);
 
         if (!active || finished >= total) {
             printf(ANSI_COLOR_BLUE "[PLANE] Nie ma potrzeby kolejnego lotu (finished=%d/%d, active=%d).\n" ANSI_COLOR_RESET,
@@ -26,153 +28,190 @@ void *plane_thread(void *arg)
             break;
         }
 
-        // Przygotowanie nowego lotu:
+        /* Przygotowanie nowego lotu */
         flight_no++;
         int random_factor = 7 + (rand() % 4); // losowo z przedziału 7..10
         int plane_luggage_capacity = plane_capacity * random_factor;
         int plane_sum_of_luggage = 0;
-        int attempt_to_fit_again = 0;
 
-        // Ustawienie parametrów nowego lotu
-        pthread_mutex_lock(&g_data.g_data_mutex);
+
+
+        pthread_mutex_lock(&g_data_mutex);
         g_data.plane_sum_of_luggage = plane_sum_of_luggage;
         g_data.plane_luggage_capacity = plane_luggage_capacity;
         g_data.people_in_plane = 0;
-        g_data.plane_in_flight = 0;    // lot otwarty – boarding dostępny
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        g_data.plane_in_flight = 0;  // lot otwarty, boarding dostępny
+        pthread_mutex_unlock(&g_data_mutex);
 
         printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Nowy lot – limit bagażu = %d.\n" ANSI_COLOR_RESET,
                flight_no, plane_luggage_capacity);
 
-        /******** BOARDING ********/
-        // Przechodzimy w pętlę pobierania pasażerów z kolejki (holu)
+        /******** BOARDING – wątek samolotu pobiera pasażerów z kolejki ********/
         while (1) {
-            // Sprawdź stan boardingu:
-            pthread_mutex_lock(&g_data.g_data_mutex);
+            /* Sprawdzenie aktualnego stanu boardingu */
+            pthread_mutex_lock(&g_data_mutex);
             int plane_now = g_data.people_in_plane;
             int capacity = g_data.plane_capacity;
             int active2 = g_data.is_simulation_active;
-            pthread_mutex_unlock(&g_data.g_data_mutex);
+            int stop_gen = g_data.stop_generating;
+            int start_earlier = g_data.plane_start_earlier;
+            pthread_mutex_unlock(&g_data_mutex);
 
             if (!active2) {
                 printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Symulacja nieaktywna.\n" ANSI_COLOR_RESET, flight_no);
                 goto plane_end;
             }
+
+            if (start_earlier) {
+                printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Flaga startu wcześniej ustawiona. Kończę boarding i odlatam.\n" ANSI_COLOR_RESET, flight_no);
+                break;
+            }
+
             if (plane_now >= capacity) {
-                // Samolot pełny – kończymy boarding
                 printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Samolot pełny (%d/%d). Boardowanie zakończone.\n" ANSI_COLOR_RESET,
                        flight_no, plane_now, capacity);
                 break;
             }
 
-            // Pobieramy pasażera z kolejki holu:
+            /* Pobieramy pasażera z kolejki holu */
             hall_node *hn = dequeue_hall();
             if (!hn) {
-                // Hol jest pusty – wątek samolotu czeka na pojawienie się nowego pasażera
+                /* Kolejka (hol) jest pusta.
+                   Sprawdzamy stan kolejki i flagi stop_generating.
+                */
                 pthread_mutex_lock(&hall_mutex);
-                // Jeśli hol faktycznie pusty:
-                int hallEmpty = ((vip_head == NULL) && (normal_head == NULL));
+                int vip_empty = (vip_head == NULL);
+                int normal_empty = (normal_head == NULL);
                 pthread_mutex_unlock(&hall_mutex);
 
-                pthread_mutex_lock(&g_data.g_data_mutex);
-                int stop_gen = g_data.stop_generating;
-                int ppl = g_data.people_in_plane;
-                pthread_mutex_unlock(&g_data.g_data_mutex);
+                pthread_mutex_lock(&g_data_mutex);
+                plane_now = g_data.people_in_plane;
+                stop_gen  = g_data.stop_generating;
+                pthread_mutex_unlock(&g_data_mutex);
 
-                // Jeśli hol pusty oraz już są pasażerowie w samolocie
-                // (oraz, opcjonalnie, nie spodziewamy się już nowych, czyli stop_gen==1),
-                // wychodzimy z pętli boardingu i przechodzimy do startu.
-                if (hallEmpty && ppl > 0 && stop_gen) {
-                    printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Hol pusty, a boardowanie ma już %d pasażerów. Przechodzę do startu.\n" ANSI_COLOR_RESET,
-                           flight_no, ppl);
+//                printf("[DEBUG] plane_thread: Kolejka holu pusta (VIP=%d, NOR=%d).\n", vip_empty, normal_empty);
+                /* Jeśli kolejka jest pusta i mamy już pasażerów w samolocie,
+                   lub jeśli generowanie zostało zatrzymane, wychodzimy z boardingu.
+                */
+                if ((vip_empty && normal_empty) && (plane_now > 0 || stop_gen)) {
+                    printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Hol pusty – kończę boarding.\n" ANSI_COLOR_RESET, flight_no);
                     break;
                 }
-
-                // Jeśli hol pusty, ale boardowanie jeszcze trwa,
-                // oczekujemy, aż pojawi się nowy pasażer w holu.
-                pthread_mutex_lock(&hall_mutex);
-                pthread_cond_wait(&hall_not_empty_cond, &hall_mutex);
-                pthread_mutex_unlock(&hall_mutex);
-                continue;
+                else {
+                    /* Jeśli kolejka pusty, ale nie mamy jeszcze wystarczająco pasażerów
+                       oraz stop_generating nie jest ustawione, czekamy na sygnał.
+                    */
+                    pthread_mutex_lock(&hall_mutex);
+                    pthread_cond_wait(&hall_not_empty_cond, &hall_mutex);
+                    pthread_mutex_unlock(&hall_mutex);
+                    continue;
+                }
             }
 
-            // Mamy pasażera z holu:
+            /* Mamy pasażera z holu – wykonujemy „boarding” */
             int pid = hn->passenger_id;
             int vip = hn->is_vip;
-            int bw  = hn->bag_weight;
+            int bw = hn->bag_weight;
 
-            // Odczytaj aktualną sumę bagażu – przyjmujemy, że jest aktualizowana w g_data
-            pthread_mutex_lock(&g_data.g_data_mutex);
-            plane_sum_of_luggage = g_data.plane_sum_of_luggage;
+            pthread_mutex_lock(&g_data_mutex);
+            int current_sum = g_data.plane_sum_of_luggage;
             int plane_limit = g_data.plane_luggage_capacity;
-            pthread_mutex_unlock(&g_data.g_data_mutex);
+            pthread_mutex_unlock(&g_data_mutex);
 
-            if (plane_sum_of_luggage + bw <= plane_limit) {
+            if (current_sum + bw <= plane_limit) {
                 printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Zapraszam pasażera %d (VIP=%d, bag=%d).\n" ANSI_COLOR_RESET,
                        flight_no, pid, vip, bw);
-
-                // Wysyłamy sygnał do pasażera, by rozpoczął boardowanie
+                // Wybudzamy pasażera – wysyłamy sygnał boardingu
                 sem_post(hn->board_sem);
 
-                // Po wywołaniu sem_post, samolot zwalnia uchwyt i pamięć dla tego węzła.
+                // Aktualizujemy licznik pasażerów oraz sumę bagażu
+                pthread_mutex_lock(&g_data_mutex);
+                g_data.people_in_plane++;
+                g_data.plane_sum_of_luggage += bw;
+                pthread_mutex_unlock(&g_data_mutex);
+
                 if (sem_close(hn->board_sem) != 0) {
                     perror("sem_close(hn->board_sem)");
                 }
                 safe_sem_unlink(hn->sem_name);
                 free(hn);
-                attempt_to_fit_again = 0;
-            }
-            else {
+            } else {
                 printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Pasażer %d (bag=%d) NIE mieści się (sum=%d, limit=%d).\n" ANSI_COLOR_RESET,
-                       flight_no, pid, bw, plane_sum_of_luggage, plane_limit);
-                // Odkładamy pasażera z powrotem do holu
+                       flight_no, pid, bw, current_sum, plane_limit);
+                // Jeśli pasażer nie mieści się wagowo, odkładamy go do kolejki
                 enqueue_hall(pid, vip, bw);
                 free(hn);
-                if (attempt_to_fit_again == 0) {
-                    printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Spróbuję jeszcze raz pobrać innego pasażera.\n" ANSI_COLOR_RESET, flight_no);
-                    attempt_to_fit_again = 1;
-                }
-                else {
-                    printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Drugi pasażer się nie mieści – lot opóźniony, odlatuję!\n" ANSI_COLOR_RESET, flight_no);
-                    break;
-                }
             }
         } // koniec pętli boardingu
 
-        /******** Po zakończeniu boardingu: ********/
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        /******** Po zakończeniu boardingu ********/
+        pthread_mutex_lock(&g_data_mutex);
         int ppl = g_data.people_in_plane;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_unlock(&g_data_mutex);
 
         if (ppl == 0) {
-            printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) 0 pasażerów -> rezygnuję z lotu.\n" ANSI_COLOR_RESET, flight_no);
-            goto plane_end;
-        }
-        else {
+            printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) 0 pasażerów -> startuję z pustym samolotem.\n" ANSI_COLOR_RESET, flight_no);
+        } else {
             printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Boardowanie zakończone: %d pasażerów wsiadło.\n" ANSI_COLOR_RESET, flight_no, ppl);
         }
 
-        // Start lotu – zamykamy drzwi
-        pthread_mutex_lock(&g_data.g_data_mutex);
-        g_data.plane_in_flight = 1;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_lock(&g_data_mutex);
+        int takeoff_time = g_data.takeoff_time;
+        pthread_mutex_unlock(&g_data_mutex);
+
+        printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Czekam %d sekund na odlot.\n" ANSI_COLOR_RESET, flight_no, takeoff_time);
+
+        pthread_mutex_lock(&g_data_mutex);
+        int new_counter = g_data.check_counter;
+        pthread_mutex_unlock(&g_data_mutex);
+
+        if (new_counter == 1) {
+            pthread_mutex_lock(&g_data_mutex);
+            g_data.check_counter = 0;
+            pthread_mutex_unlock(&g_data_mutex);
+        } else {
+            sleep(takeoff_time); // Opóźnienie przed odlotem
+        }
+
+        /* Start lotu – zamykamy boarding */
+        pthread_mutex_lock(&g_data_mutex);
+        g_data.plane_in_flight = 1;  // lot jest już "zamknięty"
+        pthread_mutex_unlock(&g_data_mutex);
 
         printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Odlatuję z %d pasażerami. (Bagaz: %d/%d)\n" ANSI_COLOR_RESET,
-               flight_no, ppl, plane_sum_of_luggage, g_data.plane_luggage_capacity);
+               flight_no, ppl, g_data.plane_sum_of_luggage, g_data.plane_luggage_capacity);
 
-        /* Tutaj symulujemy lot (możesz zaimplementować boardowanie opóźnione itp.) */
+        /* Symulacja lotu i lądowania */
+//        sleep(2);
 
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        pthread_mutex_lock(&g_data_mutex);
         g_data.finished_passengers += ppl;
         int fin_now = g_data.finished_passengers;
         int tot = g_data.total_passengers;
-        g_data.people_in_plane = 0;  // opróżniamy samolot
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        g_data.people_in_plane = 0;
+        int rejected = g_data.passengers_rejected;
+        int mad = g_data.passengers_mad;
+        pthread_mutex_unlock(&g_data_mutex);
 
         printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Wylądowaliśmy. %d pasażerów doleciało. (finished=%d/%d)\n" ANSI_COLOR_RESET,
                flight_no, ppl, fin_now, tot);
 
+        FILE *fp = fopen("raport_samoloty.txt", "a");
+        if (fp == NULL) {
+            perror("fopen(raport_samoloty.txt) error");
+        } else {
+            fprintf(fp, "Lot %d zakończony: przewieziono %d pasażerów, odrzuceni: %d, zli: %d, ogólna liczba zakończonych: %d/%d.\n",
+                    flight_no, ppl, rejected, mad, fin_now, tot);
+            fclose(fp);
+        }
+
         printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Wróciłem.\n" ANSI_COLOR_RESET, flight_no);
+
+        // Reset stanu dla kolejnego lotu:
+        pthread_mutex_lock(&g_data_mutex);
+        g_data.plane_in_flight = 0;
+        g_data.people_in_plane = 0;
+        pthread_mutex_unlock(&g_data_mutex);
     } // koniec głównej pętli lotów
 
 plane_end:

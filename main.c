@@ -9,6 +9,8 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <stddef.h>
 #include "shared.h"
 #include "dispatcher.h"
 #include "plane.h"
@@ -34,9 +36,11 @@ int main(void)
     g_data.plane_ready = 0;
     g_data.stairs_occupancy = 0;
     g_data.stop_generating = 0;
+    g_data.passengers_mad = 0;
 
     g_data.plane_sum_of_luggage = 0;
     g_data.plane_luggage_capacity = 0;
+    g_data.check_counter = 1;
 
     setup_signals();
 
@@ -74,11 +78,11 @@ int main(void)
     }
 
     /* Inicjujemy muteksy */
-    if (pthread_mutex_init(&g_data.station_mutex, NULL) != 0) {
+    if (pthread_mutex_init(&station_mutex, NULL) != 0) {
         perror("pthread_mutex_init(station_mutex)");
         exit(EXIT_FAILURE);
     }
-    if (pthread_mutex_init(&g_data.g_data_mutex, NULL) != 0) {
+    if (pthread_mutex_init(&g_data_mutex, NULL) != 0) {
         perror("pthread_mutex_init(g_data_mutex)");
         exit(EXIT_FAILURE);
     }
@@ -137,8 +141,8 @@ int main(void)
         safe_sem_unlink(name);
     }
 
-    pthread_mutex_destroy(&g_data.station_mutex);
-    pthread_mutex_destroy(&g_data.g_data_mutex);
+    pthread_mutex_destroy(&station_mutex);
+    pthread_mutex_destroy(&g_data_mutex);
 
     printf("[MAIN] Symulacja zakończona.\n");
     return EXIT_SUCCESS;

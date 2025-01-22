@@ -18,12 +18,12 @@ void *passenger_generator_thread(void *arg)
     printf(ANSI_COLOR_WHITE"[GENERATOR] Startuje. Bede tworzyl pasazerow.\n" ANSI_COLOR_RESET);
 
     while (1) {
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        pthread_mutex_lock(&g_data_mutex);
         int stop_gen = g_data.stop_generating;
         int current_count = g_data.generated_count;
         int max_count = g_data.total_passengers;
         int active = g_data.is_simulation_active;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_unlock(&g_data_mutex);
 
         if (!active) {
             printf(ANSI_COLOR_WHITE"[GENERATOR] Symulacja nieaktywna - kończę.\n" ANSI_COLOR_RESET);
@@ -40,11 +40,11 @@ void *passenger_generator_thread(void *arg)
 
 //        sleep((rand() % 2) + 1);
 
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        pthread_mutex_lock(&g_data_mutex);
         stop_gen = g_data.stop_generating;
         current_count = g_data.generated_count;
         active = g_data.is_simulation_active;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_unlock(&g_data_mutex);
 
         if (!active) {
             printf(ANSI_COLOR_WHITE"[GENERATOR] Symulacja nieaktywna -> kończę (po sleep).\n" ANSI_COLOR_RESET);
@@ -59,10 +59,10 @@ void *passenger_generator_thread(void *arg)
             break;
         }
 
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        pthread_mutex_lock(&g_data_mutex);
         int new_id = g_data.generated_count + 1;
         g_data.generated_count++;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_unlock(&g_data_mutex);
 
         int *passenger_id = malloc(sizeof(int));
         if (!passenger_id) {
@@ -112,10 +112,10 @@ void *passenger_thread(void *arg)
     if (bag_weight > g_data.baggage_limit) {
         printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odrzucony (bagaż=%d > %d)\n" ANSI_COLOR_RESET, my_id, bag_weight, g_data.baggage_limit);
         sem_post(g_data.baggage_check_sem);
-        pthread_mutex_lock(&g_data.station_mutex);
+        pthread_mutex_lock(&station_mutex);
         g_data.finished_passengers++;
         g_data.passengers_rejected++;
-        pthread_mutex_unlock(&g_data.station_mutex);
+        pthread_mutex_unlock(&station_mutex);
         goto finish_passenger;
     }
     printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odprawa OK.\n" ANSI_COLOR_RESET, my_id);
@@ -130,29 +130,17 @@ void *passenger_thread(void *arg)
     /**** Dodanie do holu (kolejka VIP lub normal), czekanie na boarding ****/
     enqueue_hall(my_id, is_vip, bag_weight);
 
-    // najpierw otwieramy semafor z tą nazwą:
     char sem_name[64];
     snprintf(sem_name, sizeof(sem_name), "/board_sem_%d", my_id);
-    sem_t *board_sem = sem_open(sem_name, 0); // już istnieje, O_CREAT w enqueue
+    sem_t *board_sem = sem_open(sem_name, 0); // semafor został utworzony w enqueue_hall
     if (board_sem == SEM_FAILED) {
         perror("sem_open(board_sem) w passenger");
         goto finish_passenger;
     }
-    // czekamy, aż plane_thread zrobi sem_post
     sem_wait(board_sem);
-
-    // boarding semafor zwolniony -> wsiadamy na schody
     sem_close(board_sem);
     safe_sem_unlink(sem_name);
 
-    /* Schody -> Samolot */
-    while (!enter_stairs_and_plane(my_id, is_vip, bag_weight)) {
-    	printf(ANSI_COLOR_GREEN"[PASSENGER %d] Nie wsiadłem, samolot startuje, wracam do holu, spróbuję za 1 sek...\n" ANSI_COLOR_RESET, my_id);
-//    	sleep(1);
-	}
-
-    printf(ANSI_COLOR_GREEN"[PASSENGER %d] W samolocie, czeka na odlot.\n" ANSI_COLOR_RESET, my_id);
-//    sleep(1);
 
 finish_passenger:
 
@@ -171,7 +159,7 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
     while (1) {
         int found_station = -1;
 
-        pthread_mutex_lock(&g_data.station_mutex);
+        pthread_mutex_lock(&station_mutex);
         for (int i = 0; i < SECURITY_STATIONS; i++) {
             if (g_data.station_gender[i] == -1) {
                 g_data.station_gender[i] = gender;
@@ -184,7 +172,7 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                 break;
             }
         }
-        pthread_mutex_unlock(&g_data.station_mutex);
+        pthread_mutex_unlock(&station_mutex);
 
         if (found_station >= 0) {
             // Zajmujemy stanowisko
@@ -192,10 +180,10 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                 perror("sem_wait(security_sem)");
                 continue;
             }
-            pthread_mutex_lock(&g_data.station_mutex);
+            pthread_mutex_lock(&station_mutex);
             g_data.station_occupancy[found_station]++;
             int occ_now = g_data.station_occupancy[found_station];
-            pthread_mutex_unlock(&g_data.station_mutex);
+            pthread_mutex_unlock(&station_mutex);
 
 			printf(ANSI_COLOR_YELLOW
        			"[SECURITY] Pasażer %d (gender=%d%s) WCHODZI do st.%d (occ=%d)\n"
@@ -217,7 +205,7 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                 if (sem_post(g_data.security_sem[found_station]) != 0) {
                     perror("sem_post(security_sem)");
                 }
-                pthread_mutex_lock(&g_data.station_mutex);
+                pthread_mutex_lock(&station_mutex);
                 g_data.station_occupancy[found_station]--;
                 g_data.finished_passengers++;
                 g_data.passengers_rejected++;
@@ -226,7 +214,7 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                     g_data.station_gender[found_station] = -1;
                     printf(ANSI_COLOR_YELLOW"[SECURITY] Stanowisko %d PUSTE.\n" ANSI_COLOR_RESET, found_station);
                 }
-                pthread_mutex_unlock(&g_data.station_mutex);
+                pthread_mutex_unlock(&station_mutex);
 
                 printf(ANSI_COLOR_YELLOW"[SECURITY] Pasażer %d ODRZUCONY.\n" ANSI_COLOR_RESET, passenger_id);
                 return 0;
@@ -237,14 +225,14 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                 if (sem_post(g_data.security_sem[found_station]) != 0) {
                     perror("sem_post(security_sem)");
                 }
-                pthread_mutex_lock(&g_data.station_mutex);
+                pthread_mutex_lock(&station_mutex);
                 g_data.station_occupancy[found_station]--;
                 int occ_after = g_data.station_occupancy[found_station];
                 if (occ_after == 0) {
                     g_data.station_gender[found_station] = -1;
                     printf(ANSI_COLOR_YELLOW"[SECURITY] Stanowisko %d PUSTE.\n" ANSI_COLOR_RESET, found_station);
                 }
-                pthread_mutex_unlock(&g_data.station_mutex);
+                pthread_mutex_unlock(&station_mutex);
 
                 printf(ANSI_COLOR_YELLOW"[SECURITY] Pasażer %d WYCHODZI z st.%d (occ=%d)\n" ANSI_COLOR_RESET,
                        passenger_id, found_station, occ_after);
@@ -259,6 +247,10 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                 if (wait_count > 3) {
                     printf(ANSI_COLOR_YELLOW"[SECURITY] Pasażer %d jest zły (czekał %d razy) i rezygnuje!\n" ANSI_COLOR_RESET,
                            passenger_id, wait_count);
+                    pthread_mutex_lock(&station_mutex);
+                    g_data.finished_passengers++;
+                    g_data.passengers_mad++;
+                    pthread_mutex_unlock(&station_mutex);
                     return 0;  // rezygnuje
                 }
             }
@@ -269,10 +261,10 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
 
 int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
 {
-    pthread_mutex_lock(&g_data.g_data_mutex);
+    pthread_mutex_lock(&g_data_mutex);
     int current_stairs = g_data.stairs_occupancy;
     int capacity_stairs = g_data.stairs_capacity;
-    pthread_mutex_unlock(&g_data.g_data_mutex);
+    pthread_mutex_unlock(&g_data_mutex);
 
     if (current_stairs >= capacity_stairs) {
         printf(ANSI_COLOR_MAGENTA"[STAIRS] Pasażer %d (VIP=%d) widzi pełne schody (occ=%d/%d), wraca do holu.\n" ANSI_COLOR_RESET,
@@ -281,10 +273,10 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
         return 0;
     }
 
-    pthread_mutex_lock(&g_data.g_data_mutex);
+    pthread_mutex_lock(&g_data_mutex);
     g_data.stairs_occupancy++;
     int now_stairs = g_data.stairs_occupancy;
-    pthread_mutex_unlock(&g_data.g_data_mutex);
+    pthread_mutex_unlock(&g_data_mutex);
 
     printf(ANSI_COLOR_MAGENTA"[STAIRS] Pasażer %d (VIP=%d) WCHODZI na schody (occ=%d/%d)\n" ANSI_COLOR_RESET,
            passenger_id, is_vip, now_stairs, capacity_stairs);
@@ -292,9 +284,9 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
     if (sem_wait(g_data.stairs_sem) != 0) {
         perror("sem_wait(stairs_sem)");
         // w razie błędu:
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        pthread_mutex_lock(&g_data_mutex);
         g_data.stairs_occupancy--;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_unlock(&g_data_mutex);
 
         enqueue_hall(passenger_id, is_vip, bag_weight);
         return 0;
@@ -303,13 +295,13 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
 //    sleep(2);
     printf(ANSI_COLOR_MAGENTA"[STAIRS] Pasażer %d ZSZEDŁ ze schodów.\n" ANSI_COLOR_RESET, passenger_id);
 
-    pthread_mutex_lock(&g_data.g_data_mutex);
+    pthread_mutex_lock(&g_data_mutex);
     int plane_state = g_data.plane_in_flight;  // 0=otwarty, 1=w locie
     int plane_now = g_data.people_in_plane;
     int plane_cap = g_data.plane_capacity;
     int plane_sum = g_data.plane_sum_of_luggage;
 	int plane_limit = g_data.plane_luggage_capacity;
-    pthread_mutex_unlock(&g_data.g_data_mutex);
+    pthread_mutex_unlock(&g_data_mutex);
 
     // Jeśli samolot startuje -> wracamy do holu
     if (plane_state == 1) {
@@ -317,10 +309,10 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
                passenger_id, is_vip);
 
         // Zwolnij schody
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        pthread_mutex_lock(&g_data_mutex);
         g_data.stairs_occupancy--;
         int now_stairs2 = g_data.stairs_occupancy;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_unlock(&g_data_mutex);
 
         if (sem_post(g_data.stairs_sem) != 0) {
             perror("sem_post(stairs_sem)");
@@ -340,10 +332,10 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
                passenger_id, is_vip, plane_now, plane_cap);
 
         // Zwolnij schody
-        pthread_mutex_lock(&g_data.g_data_mutex);
+        pthread_mutex_lock(&g_data_mutex);
         g_data.stairs_occupancy--;
         int now_stairs2 = g_data.stairs_occupancy;
-        pthread_mutex_unlock(&g_data.g_data_mutex);
+        pthread_mutex_unlock(&g_data_mutex);
 
         if (sem_post(g_data.stairs_sem) != 0) {
             perror("sem_post(stairs_sem)");
@@ -362,10 +354,10 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
         	passenger_id, bag_weight, plane_sum, plane_limit);
 
     	// Zwolnij schody, odsyłamy do holu
-    	pthread_mutex_lock(&g_data.g_data_mutex);
+    	pthread_mutex_lock(&g_data_mutex);
     	g_data.stairs_occupancy--;
     	//int now_stairs = g_data.stairs_occupancy;
-    	pthread_mutex_unlock(&g_data.g_data_mutex);
+    	pthread_mutex_unlock(&g_data_mutex);
 
     	sem_post(g_data.stairs_sem);
     	enqueue_hall(passenger_id, is_vip, bag_weight);
@@ -373,7 +365,7 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
 	}
 
     // Tutaj samolot otwarty i NIEpełny => wchodzimy
-    pthread_mutex_lock(&g_data.g_data_mutex);
+    pthread_mutex_lock(&g_data_mutex);
     g_data.people_in_plane++;
     g_data.plane_sum_of_luggage += bag_weight;
     plane_now = g_data.people_in_plane;
@@ -381,7 +373,7 @@ int enter_stairs_and_plane(int passenger_id, int is_vip, int bag_weight)
     g_data.stairs_occupancy--;
     now_stairs = g_data.stairs_occupancy;
     pthread_cond_signal(&boarding_cond);
-    pthread_mutex_unlock(&g_data.g_data_mutex);
+    pthread_mutex_unlock(&g_data_mutex);
 
     if (sem_post(g_data.stairs_sem) != 0) {
         perror("sem_post(stairs_sem)");
