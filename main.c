@@ -40,7 +40,7 @@ int main(void)
 
     g_data.plane_sum_of_luggage = 0;
     g_data.plane_luggage_capacity = 0;
-    g_data.check_counter = 1;
+    g_data.check_counter = 0;
 
     setup_signals();
 
