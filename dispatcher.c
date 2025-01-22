@@ -38,13 +38,21 @@ void *dispatcher_thread(void *arg)
             sleep(check_counter);
             printf(ANSI_COLOR_CYAN"[DISPATCHER] Wysyłam sygnał SIGUSR1, by przyspieszyć lot.\n" ANSI_COLOR_RESET);
         	raise(SIGUSR1);
+        	pthread_mutex_lock(&g_data_mutex);
+        	g_data.check_counter = 0;
+        	pthread_mutex_unlock(&g_data_mutex);
         }
 
     	if (check_counter == 2) {
-    		// Po 2 sek -> zamykam odprawę biletowo-bagażową
-    		sleep(check_counter);
+    		// Po 6 sek -> zamykam odprawę biletowo-bagażową
+            // łatwiej pokazać z sleep((rand() % 2) + 1) w passenger_generator_thread
+            // inaczej pasażerowie za szybko się generują
+    		sleep(6);
     		printf(ANSI_COLOR_CYAN"[DISPATCHER] Wysyłam sygnał SIGUSR2 - zamykam odprawę biletowo-bagażową!\n" ANSI_COLOR_RESET);
     		raise(SIGUSR2);
+    		pthread_mutex_lock(&g_data_mutex);
+    		g_data.check_counter = 0;
+    		pthread_mutex_unlock(&g_data_mutex);
         }
 
         // Jeśli wszyscy pasażerowie skończyli – koniec

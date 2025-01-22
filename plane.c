@@ -63,8 +63,21 @@ void *plane_thread(void *arg)
             }
 
             if (start_earlier) {
-                printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Flaga startu wcześniej ustawiona. Kończę boarding i odlatam.\n" ANSI_COLOR_RESET, flight_no);
-                break;
+                pthread_mutex_lock(&g_data_mutex);
+                if (g_data.people_in_plane > 0) {
+                    printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Flaga startu wcześniej ustawiona. Kończę boarding i odlatam.\n" ANSI_COLOR_RESET, flight_no);
+                    g_data.plane_start_earlier = 0;
+                    pthread_mutex_unlock(&g_data_mutex);
+                    break;
+                }
+                else {
+                    // No passengers to take early flight, continue boarding
+                    printf(ANSI_COLOR_BLUE "[PLANE] (Lot %d) Flaga startu wcześniej ustawiona, ale brak pasażerów. Kontynuuję boarding.\n" ANSI_COLOR_RESET, flight_no);
+                    // Resetowanie flagi, aby zapobiec ponownemu wysłaniu sygnału
+                    g_data.plane_start_earlier = 0;
+                    pthread_mutex_unlock(&g_data_mutex);
+                    // Kontynuuj boarding
+                }
             }
 
             if (plane_now >= capacity) {
