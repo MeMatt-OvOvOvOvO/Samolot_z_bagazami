@@ -60,9 +60,11 @@ void *dispatcher_thread(void *arg)
     		pthread_mutex_lock(&g_data_mutex);
     		g_data.is_simulation_active = 0;
     		still_active = g_data.is_simulation_active;
+            int rejected = g_data.passengers_rejected;
+            int mad = g_data.passengers_mad;
     		pthread_mutex_unlock(&g_data_mutex);
-    		printf(ANSI_COLOR_CYAN"[DISPATCHER] Warunek końca: generated=%d, finished=%d, stairs=%d, hall_empty=%d.\n" ANSI_COLOR_RESET,
-				   gen_count, finished, stairs, hall_empty);
+    		printf(ANSI_COLOR_CYAN"[DISPATCHER] Warunek końca: generated=%d, finished=%d, rejected=%d, mad=%d, stairs=%d, hall_empty=%d.\n" ANSI_COLOR_RESET,
+				   gen_count, finished, rejected, mad, stairs, hall_empty);
     		pthread_mutex_lock(&hall_mutex);
     		while (vip_head != NULL || normal_head != NULL) {
     			hall_node *node = dequeue_hall();
@@ -82,6 +84,7 @@ void *dispatcher_thread(void *arg)
     			}
     		}
     		pthread_mutex_unlock(&hall_mutex);
+    		pthread_cond_broadcast(&hall_not_empty_cond);
             break;
 		}
 
@@ -92,6 +95,28 @@ void *dispatcher_thread(void *arg)
     		still_active = g_data.is_simulation_active;
     		pthread_mutex_unlock(&g_data_mutex);
     		printf(ANSI_COLOR_CYAN"[DISPATCHER] Sygnał2 i wszyscy (%d) już przewiezieni/obsłużeni -> koniec.\n" ANSI_COLOR_RESET, finished);
+    		pthread_mutex_lock(&hall_mutex);
+    		while (vip_head != NULL || normal_head != NULL) {
+    			hall_node *node = dequeue_hall();
+    			if (node) {
+    				// Wybudź pasażera
+    				sem_post(node->board_sem);
+
+    				// Zaktualizuj finished_passengers
+    				pthread_mutex_lock(&g_data_mutex);
+    				g_data.finished_passengers++;
+    				pthread_mutex_unlock(&g_data_mutex);
+
+    				// Zamknij semafor i usuń węzeł
+    				sem_close(node->board_sem);
+    				safe_sem_unlink(node->sem_name);
+    				free(node);
+    			}
+    		}
+    		pthread_mutex_unlock(&hall_mutex);
+
+    		// Sygnalizuj zmienną warunkową, aby obudzić plane_thread
+    		pthread_cond_broadcast(&hall_not_empty_cond);
     		break;
     	}
 
