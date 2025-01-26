@@ -5,7 +5,7 @@
 #include "shared.h"
 #include "passenger.h"
 
-int enter_security_check(int gender, int is_vip, int passenger_id);
+int enter_security_check(int gender, int is_vip, int passenger_id, int bag_weight);
 
 int enter_stairs_and_plane(int id, int is_vip, int bag_weight);
 
@@ -98,38 +98,20 @@ void *passenger_thread(void *arg)
     int is_vip = (rand() % 5 == 0) ? 1 : 0; // co piaty VIP
     int gender = (rand() % 2); // 0 = mezczyzna, 1 = kobieta
 
-    printf(ANSI_COLOR_GREEN"[PASSENGER %d] Jestem watkiem pasazera (bagaż=%d, VIP=%d, gender=%d)\n" ANSI_COLOR_RESET,
-           my_id, bag_weight, is_vip, gender);
+    printf(ANSI_COLOR_GREEN
+           "[PASSENGER %d] Jestem wątkiem pasażera (bagaż=%d, VIP=%d, gender=%d)\n"
+           ANSI_COLOR_RESET, my_id, bag_weight, is_vip, gender);
 
-    /* Odprawa bagażowa */
-    if (sem_wait(g_data.baggage_check_sem) != 0) {
-        perror("sem_wait(baggage_check_sem)");
-        goto finish_passenger;
-    }
-    printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odprawa bagażowa...\n" ANSI_COLOR_RESET, my_id);
-//    sleep(1);
-
-    if (bag_weight > g_data.baggage_limit) {
-        printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odrzucony (bagaż=%d > %d)\n" ANSI_COLOR_RESET, my_id, bag_weight, g_data.baggage_limit);
-        sem_post(g_data.baggage_check_sem);
-        pthread_mutex_lock(&station_mutex);
-        g_data.finished_passengers++;
-        g_data.passengers_rejected++;
-        pthread_mutex_unlock(&station_mutex);
-        goto finish_passenger;
-    }
-    printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odprawa OK.\n" ANSI_COLOR_RESET, my_id);
-    sem_post(g_data.baggage_check_sem);
-
-    /* Kontrola bezpieczeństwa */
-    if (!enter_security_check(gender, is_vip, my_id)) {
-        // 0 => pasażer odrzucony, kończymy
+    /* Kontrola bezpieczeństwa + odprawa bagażowa w jednej funkcji */
+    if (!enter_security_check(gender, is_vip, my_id, bag_weight)) {
+        // Funkcja zwraca 0 => pasażer odrzucony, kończymy wątek
         goto finish_passenger;
     }
 
     /**** Dodanie do holu (kolejka VIP lub normal), czekanie na boarding ****/
     enqueue_hall(my_id, is_vip, bag_weight);
 
+    // Oczekiwanie na boarding
     char sem_name[64];
     snprintf(sem_name, sizeof(sem_name), "/board_sem_%d", my_id);
     sem_t *board_sem = sem_open(sem_name, 0); // semafor został utworzony w enqueue_hall
@@ -141,19 +123,46 @@ void *passenger_thread(void *arg)
     sem_close(board_sem);
     safe_sem_unlink(sem_name);
 
-
 finish_passenger:
-
-
     printf(ANSI_COLOR_GREEN"[PASSENGER %d] Kończy wątek pasażera...\n" ANSI_COLOR_RESET, my_id);
     pthread_exit(NULL);
 }
 
 /*******************************************************
- * enter_security_check(): czeka max 3 razy, VIP nie rośnie wait_count
+ * enter_security_check():
+ *   1. Najpierw odprawa bagażowa
+ *   2. Następnie kontrola bezpieczeństwa
+ *   3. Zwraca 0 w przypadku odrzucenia, 1 w przypadku powodzenia
  *******************************************************/
-int enter_security_check(int gender, int is_vip, int passenger_id)
+int enter_security_check(int gender, int is_vip, int passenger_id, int bag_weight)
 {
+    /* ========== Odprawa bagażowa ========== */
+    if (sem_wait(g_data.baggage_check_sem) != 0) {
+        perror("sem_wait(baggage_check_sem)");
+        return 0;
+    }
+
+    printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odprawa bagażowa...\n" ANSI_COLOR_RESET, passenger_id);
+    // sleep(1);
+
+    if (bag_weight > g_data.baggage_limit) {
+        printf(ANSI_COLOR_GREEN
+               "[PASSENGER %d] Odrzucony (bagaż=%d > %d)\n"
+               ANSI_COLOR_RESET, passenger_id, bag_weight, g_data.baggage_limit);
+
+        sem_post(g_data.baggage_check_sem);
+        pthread_mutex_lock(&station_mutex);
+        g_data.finished_passengers++;
+        g_data.passengers_rejected++;
+        pthread_mutex_unlock(&station_mutex);
+
+        return 0; // bagaż za ciężki -> odrzucony
+    }
+
+    printf(ANSI_COLOR_GREEN"[PASSENGER %d] Odprawa bagażowa OK.\n" ANSI_COLOR_RESET, passenger_id);
+    sem_post(g_data.baggage_check_sem);
+
+    /* ========== Kontrola bezpieczeństwa ========== */
     int wait_count = 0;
 
     while (1) {
@@ -185,22 +194,23 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
             int occ_now = g_data.station_occupancy[found_station];
             pthread_mutex_unlock(&station_mutex);
 
-			printf(ANSI_COLOR_YELLOW
-       			"[SECURITY] Pasażer %d (gender=%d%s) WCHODZI do st.%d (occ=%d)\n"
-       			ANSI_COLOR_RESET,
-       			passenger_id,
-       			gender,
-       			(is_vip ? " [VIP]" : ""),
-       			found_station,
-       			occ_now);
+            printf(ANSI_COLOR_YELLOW
+                   "[SECURITY] Pasażer %d (gender=%d%s) WCHODZI do st.%d (occ=%d)\n"
+                   ANSI_COLOR_RESET,
+                   passenger_id,
+                   gender,
+                   (is_vip ? " [VIP]" : ""),
+                   found_station,
+                   occ_now);
 
-            /* Symulacja kontroli */
-//            sleep(1);
+            // Symulacja kontroli
+            // sleep(1);
 
             int dangerous = (rand() % 100 < 5);
             if (dangerous) {
-                printf(ANSI_COLOR_YELLOW"[SECURITY] Pasażer %d - NIEBEZPIECZNY przedmiot! Odrzucamy.\n"
-                     ANSI_COLOR_RESET, passenger_id);
+                printf(ANSI_COLOR_YELLOW
+                       "[SECURITY] Pasażer %d - NIEBEZPIECZNY przedmiot! Odrzucamy.\n"
+                       ANSI_COLOR_RESET, passenger_id);
 
                 if (sem_post(g_data.security_sem[found_station]) != 0) {
                     perror("sem_post(security_sem)");
@@ -212,15 +222,21 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                 int occ_after = g_data.station_occupancy[found_station];
                 if (occ_after == 0) {
                     g_data.station_gender[found_station] = -1;
-                    printf(ANSI_COLOR_YELLOW"[SECURITY] Stanowisko %d PUSTE.\n" ANSI_COLOR_RESET, found_station);
+                    printf(ANSI_COLOR_YELLOW
+                           "[SECURITY] Stanowisko %d PUSTE.\n"
+                           ANSI_COLOR_RESET, found_station);
                 }
                 pthread_mutex_unlock(&station_mutex);
 
-                printf(ANSI_COLOR_YELLOW"[SECURITY] Pasażer %d ODRZUCONY.\n" ANSI_COLOR_RESET, passenger_id);
-                return 0;
+                printf(ANSI_COLOR_YELLOW
+                       "[SECURITY] Pasażer %d ODRZUCONY.\n"
+                       ANSI_COLOR_RESET, passenger_id);
+                return 0; // pasażer odrzucony przy kontroli
             }
             else {
-                printf(ANSI_COLOR_YELLOW"[SECURITY] Pasażer %d - kontrola OK.\n" ANSI_COLOR_RESET, passenger_id);
+                printf(ANSI_COLOR_YELLOW
+                       "[SECURITY] Pasażer %d - kontrola OK.\n"
+                       ANSI_COLOR_RESET, passenger_id);
 
                 if (sem_post(g_data.security_sem[found_station]) != 0) {
                     perror("sem_post(security_sem)");
@@ -230,14 +246,18 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
                 int occ_after = g_data.station_occupancy[found_station];
                 if (occ_after == 0) {
                     g_data.station_gender[found_station] = -1;
-                    printf(ANSI_COLOR_YELLOW"[SECURITY] Stanowisko %d PUSTE.\n" ANSI_COLOR_RESET, found_station);
+                    printf(ANSI_COLOR_YELLOW
+                           "[SECURITY] Stanowisko %d PUSTE.\n"
+                           ANSI_COLOR_RESET, found_station);
                 }
                 pthread_mutex_unlock(&station_mutex);
 
-                printf(ANSI_COLOR_YELLOW"[SECURITY] Pasażer %d WYCHODZI z st.%d (occ=%d)\n" ANSI_COLOR_RESET,
+                printf(ANSI_COLOR_YELLOW
+                       "[SECURITY] Pasażer %d WYCHODZI z st.%d (occ=%d)\n"
+                       ANSI_COLOR_RESET,
                        passenger_id, found_station, occ_after);
 
-                return 1;
+                return 1; // kontrola udana, pasażer przechodzi dalej
             }
         }
         else {
@@ -245,16 +265,18 @@ int enter_security_check(int gender, int is_vip, int passenger_id)
             if (!is_vip) {
                 wait_count++;
                 if (wait_count > 3) {
-                    printf(ANSI_COLOR_YELLOW"[SECURITY] Pasażer %d jest zły (czekał %d razy) i rezygnuje!\n" ANSI_COLOR_RESET,
+                    printf(ANSI_COLOR_YELLOW
+                           "[SECURITY] Pasażer %d jest zły (czekał %d razy) i rezygnuje!\n"
+                           ANSI_COLOR_RESET,
                            passenger_id, wait_count);
                     pthread_mutex_lock(&station_mutex);
                     g_data.finished_passengers++;
                     g_data.passengers_mad++;
                     pthread_mutex_unlock(&station_mutex);
-                    return 0;  // rezygnuje
+                    return 0; // rezygnuje z kolejki
                 }
             }
-//            sleep(1);
+            // sleep(1); // opcjonalnie
         }
     }
 }
